@@ -44,19 +44,19 @@ impl Vector {
         }
     }
 
-    pub fn dot(&self, other: &Vector) -> f32 {
+    pub fn dot(self, other: Vector) -> f32 {
         self.x * other.x + self.y * other.y + self.z * other.z + self.w * other.w
     }
 
-    pub fn length(&self) -> f32 {
+    pub fn length(self) -> f32 {
         (self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w).sqrt()
     }
 
-    pub fn length_squared(&self) -> f32 {
+    pub fn length_squared(self) -> f32 {
         self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w
     }
 
-    pub fn normalize(&self) -> Vector {
+    pub fn normalize(self) -> Vector {
         let len = self.length();
         if len > 0.0 {
             Vector {
@@ -66,7 +66,7 @@ impl Vector {
                 w: self.w / len,
             }
         } else {
-            *self
+            self
         }
     }
 
@@ -99,7 +99,7 @@ impl Vector {
         }
     }
 
-    pub fn hadamard(&self, other: &Vector) -> Vector {
+    pub fn hadamard(self, other: Vector) -> Vector {
         Vector {
             w: self.w * other.w,
             x: self.x * other.x,
@@ -108,7 +108,7 @@ impl Vector {
         }
     }
 
-    pub fn geometric(&self, other: &Vector) -> Vector {
+    pub fn geometric(self, other: Vector) -> Vector {
         Vector {
             w: self.w * other.w - self.x * other.x - self.y * other.y - self.z * other.z,
             x: self.w * other.x + self.x * other.w + self.y * other.z - self.z * other.y,
@@ -117,7 +117,7 @@ impl Vector {
         }
     }
 
-    pub fn conjugate(&self) -> Vector {
+    pub fn conjugate(self) -> Vector {
         Vector {
             x: -self.x,
             y: -self.y,
@@ -126,7 +126,7 @@ impl Vector {
         }
     }
 
-    pub fn inverse(&self) -> Vector {
+    pub fn inverse(self) -> Vector {
         let len_sq = self.length_squared();
         if len_sq > 0.0 {
             let conj = self.conjugate();
@@ -137,14 +137,14 @@ impl Vector {
                 w: conj.w / len_sq,
             }
         } else {
-            *self
+            self
         }
     }
 
-    pub fn slerp(&self, other: &Vector, t: f32) -> Vector {
+    pub fn slerp(self, other: Vector, t: f32) -> Vector {
         let mut dot = self.dot(other);
 
-        let mut other_adjusted = *other;
+        let mut other_adjusted = other;
         if dot < 0.0 {
             other_adjusted = -other_adjusted;
             dot = -dot;
@@ -154,7 +154,7 @@ impl Vector {
 
         if dot > 0.9995 {
             // Use linear interpolation for very close quaternions
-            return (*self + (other_adjusted - *self) * t).normalize();
+            return (self + (other_adjusted - self) * t).normalize();
         }
 
         let theta = dot.acos();
@@ -163,11 +163,11 @@ impl Vector {
         let a = ((1.0 - t) * theta).sin() / sin_theta;
         let b = (t * theta).sin() / sin_theta;
 
-        *self * a + other_adjusted * b
+        self * a + other_adjusted * b
     }
 
     // Returns (pitch, yaw, roll)
-    pub fn to_euler(&self) -> (f32, f32, f32) {
+    pub fn to_euler(self) -> (f32, f32, f32) {
         let sinr_cosp = 2.0 * (self.w * self.x + self.y * self.z);
         let cosr_cosp = 1.0 - 2.0 * (self.x * self.x + self.y * self.y);
         let roll = sinr_cosp.atan2(cosr_cosp);
