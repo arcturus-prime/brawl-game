@@ -1,0 +1,8 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+brawl-game-shared = { version = "0.1.0", path = "../shared" }
+raylib = "5.5.1"
