@@ -1,6 +1,11 @@
-use std::ops::{
-    Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign,
+use std::{
+    f32::EPSILON,
+    ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
 };
+
+pub const VECTOR_X: Vector = Vector::from_vector(1.0, 0.0, 0.0);
+pub const VECTOR_Y: Vector = Vector::from_vector(0.0, 1.0, 0.0);
+pub const VECTOR_Z: Vector = Vector::from_vector(0.0, 0.0, 1.0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vector {
@@ -123,6 +128,10 @@ impl Vector {
         let b = (t * theta).sin() / sin_theta;
 
         self * a + other_adjusted * b
+    }
+
+    pub fn project_onto(self, other: Vector) -> Vector {
+        other.dot(self) * other
     }
 }
 
@@ -265,6 +274,91 @@ impl Transform {
     }
     pub fn position(&self) -> Vector {
         self.w.to_point()
+    }
+
+    pub fn inverse_rotation(self) -> Self {
+        Transform {
+            x: Vector::new(self.x.x, self.y.x, self.z.x, 0.0),
+            y: Vector::new(self.x.y, self.y.y, self.z.y, 0.0),
+            z: Vector::new(self.x.z, self.y.z, self.z.z, 0.0),
+            w: Vector::new(0.0, 0.0, 0.0, 1.0),
+        }
+    }
+
+    pub fn inverse_affine(self) -> Self {
+        let rotation_transpose = Transform {
+            x: Vector::new(self.x.x, self.y.x, self.z.x, 0.0),
+            y: Vector::new(self.x.y, self.y.y, self.z.y, 0.0),
+            z: Vector::new(self.x.z, self.y.z, self.z.z, 0.0),
+            w: Vector::new(0.0, 0.0, 0.0, 1.0),
+        };
+
+        let mut t_inv = Vector::new(-self.w.x, -self.w.y, -self.w.z, 1.0);
+        t_inv = rotation_transpose * t_inv;
+
+        Transform {
+            x: rotation_transpose.x.to_vector(),
+            y: rotation_transpose.y.to_vector(),
+            z: rotation_transpose.z.to_vector(),
+            w: Vector::new(t_inv.x, t_inv.y, t_inv.z, 1.0),
+        }
+    }
+
+    /// Please note that this function is rather __expensive__, and that for most cases `inverse_affine` is enough
+    pub fn inverse(&self) -> Option<Self> {
+        let c0 = self.x;
+        let c1 = self.y;
+        let c2 = self.z;
+        let c3 = self.w;
+
+        let s0 = c0.x * c1.y - c1.x * c0.y;
+        let s1 = c0.x * c1.z - c1.x * c0.z;
+        let s2 = c0.x * c1.w - c1.x * c0.w;
+        let s3 = c0.y * c1.z - c1.y * c0.z;
+        let s4 = c0.y * c1.w - c1.y * c0.w;
+        let s5 = c0.z * c1.w - c1.z * c0.w;
+
+        let c5 = c2.z * c3.w - c3.z * c2.w;
+        let c4 = c2.y * c3.w - c3.y * c2.w;
+        let c3_val = c2.y * c3.z - c3.y * c2.z;
+        let c2_val = c2.x * c3.w - c3.x * c2.w;
+        let c1_val = c2.x * c3.z - c3.x * c2.z;
+        let c0_val = c2.x * c3.y - c3.x * c2.y;
+
+        let det = s0 * c5 - s1 * c4 + s2 * c3_val + s3 * c2_val - s4 * c1_val + s5 * c0_val;
+
+        if det.abs() < EPSILON {
+            return None;
+        }
+
+        let inv_det = 1.0 / det;
+
+        let x_x = (c1.y * c5 - c1.z * c4 + c1.w * c3_val) * inv_det;
+        let x_y = (-c1.x * c5 + c1.z * c2_val - c1.w * c1_val) * inv_det;
+        let x_z = (c1.x * c4 - c1.y * c2_val + c1.w * c0_val) * inv_det;
+        let x_w = (-c1.x * c3_val + c1.y * c1_val - c1.z * c0_val) * inv_det;
+
+        let y_x = (-c0.y * c5 + c0.z * c4 - c0.w * c3_val) * inv_det;
+        let y_y = (c0.x * c5 - c0.z * c2_val + c0.w * c1_val) * inv_det;
+        let y_z = (-c0.x * c4 + c0.y * c2_val - c0.w * c0_val) * inv_det;
+        let y_w = (c0.x * c3_val - c0.y * c1_val + c0.z * c0_val) * inv_det;
+
+        let z_x = (c3.y * s5 - c3.z * s4 + c3.w * s3) * inv_det;
+        let z_y = (-c3.x * s5 + c3.z * s2 - c3.w * s1) * inv_det;
+        let z_z = (c3.x * s4 - c3.y * s2 + c3.w * s0) * inv_det;
+        let z_w = (-c3.x * s3 + c3.y * s1 - c3.z * s0) * inv_det;
+
+        let w_x = (-c2.y * s5 + c2.z * s4 - c2.w * s3) * inv_det;
+        let w_y = (c2.x * s5 - c2.z * s2 + c2.w * s1) * inv_det;
+        let w_z = (-c2.x * s4 + c2.y * s2 - c2.w * s0) * inv_det;
+        let w_w = (c2.x * s3 - c2.y * s1 + c2.z * s0) * inv_det;
+
+        Some(Transform {
+            x: Vector::new(x_x, x_y, x_z, x_w),
+            y: Vector::new(y_x, y_y, y_z, y_w),
+            z: Vector::new(z_x, z_y, z_z, z_w),
+            w: Vector::new(w_x, w_y, w_z, w_w),
+        })
     }
 }
 
@@ -425,26 +519,38 @@ impl Frustum {
 
         let normalize_plane = |p: Vector| {
             let len = (p.x * p.x + p.y * p.y + p.z * p.z).sqrt();
-            if len > 1e-6 { p / len } else { p }
+            if len > EPSILON { p / len } else { p }
         };
 
         Frustum {
             planes: [
-                normalize_plane(row3 + row0), // Left
-                normalize_plane(row3 - row0), // Right
-                normalize_plane(row3 + row1), // Bottom
-                normalize_plane(row3 - row1), // Top
-                normalize_plane(row3 + row2), // Near
-                normalize_plane(row3 - row2), // Far
+                normalize_plane(row3 + row0), // left
+                normalize_plane(row3 - row0), // right
+                normalize_plane(row3 + row1), // bottom
+                normalize_plane(row3 - row1), // top
+                normalize_plane(row3 + row2), // near
+                normalize_plane(row3 - row2), // far
             ],
         }
     }
 
-    pub fn intersects_aabb(&self, min: Vector, max: Vector) -> bool {
+    pub fn intersects_aabb(&self, bounds: BoundingBox) -> bool {
         for plane in &self.planes {
-            let p_x = if plane.x > 0.0 { max.x } else { min.x };
-            let p_y = if plane.y > 0.0 { max.y } else { min.y };
-            let p_z = if plane.z > 0.0 { max.z } else { min.z };
+            let p_x = if plane.x > 0.0 {
+                bounds.max.0
+            } else {
+                bounds.min.0
+            };
+            let p_y = if plane.y > 0.0 {
+                bounds.max.1
+            } else {
+                bounds.min.1
+            };
+            let p_z = if plane.z > 0.0 {
+                bounds.max.2
+            } else {
+                bounds.min.2
+            };
 
             let p_vertex = Vector::new(p_x, p_y, p_z, 1.0);
 
@@ -454,5 +560,50 @@ impl Frustum {
         }
 
         true
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct BoundingBox {
+    min: (f32, f32, f32),
+    max: (f32, f32, f32),
+}
+
+impl BoundingBox {
+    pub fn new(min: Vector, max: Vector) -> Self {
+        Self {
+            min: (min.x, min.y, min.z),
+            max: (max.x, max.y, max.z),
+        }
+    }
+
+    pub fn contains(&self, other: &BoundingBox) -> bool {
+        self.min.0 < other.min.0
+            && self.min.1 < other.min.1
+            && self.min.2 < other.min.2
+            && self.max.0 > other.max.0
+            && self.max.1 > other.max.1
+            && self.max.2 > other.max.2
+    }
+
+    pub fn intersects(&self, other: &BoundingBox) -> bool {
+        (self.min.0 <= other.max.0 && self.max.0 >= other.min.0)
+            && (self.min.1 <= other.max.1 && self.max.1 >= other.min.1)
+            && (self.min.2 <= other.max.2 && self.max.2 >= other.min.2)
+    }
+
+    pub fn union(self, other: BoundingBox) -> BoundingBox {
+        Self {
+            min: (
+                self.min.0.min(other.min.0),
+                self.min.1.min(other.min.1),
+                self.min.2.min(other.min.2),
+            ),
+            max: (
+                self.max.0.max(other.max.0),
+                self.max.1.max(other.max.1),
+                self.max.2.max(other.max.2),
+            ),
+        }
     }
 }

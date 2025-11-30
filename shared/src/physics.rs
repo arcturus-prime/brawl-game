@@ -1,8 +1,8 @@
 use crate::math::{Transform, Vector};
 
-pub trait Collider {
+pub trait Collidable {
     fn support(&self, direction: Vector) -> Vector;
-    fn position(&self) -> Vector;
+    fn transform(&mut self, transform: Transform);
 }
 
 enum Simplex {
@@ -12,7 +12,7 @@ enum Simplex {
     Tetrahedron(Vector, Vector, Vector, Vector),
 }
 
-pub fn gjk<T: Collider, U: Collider>(
+pub fn gjk<T: Collidable + ?Sized, U: Collidable + ?Sized>(
     collider1: &T,
     collider2: &U,
     mut direction: Vector,
@@ -118,15 +118,20 @@ pub fn gjk<T: Collider, U: Collider>(
 }
 
 // note that this function is an approximation that will work better when penetration depths are minimal
-pub fn collision_test<T: Collider, U: Collider>(
-    collider1: &T,
-    collider2: &U,
+// may replace later with proper EPA
+pub fn collision_test<T: Collidable + ?Sized, U: Collidable + ?Sized>(
+    collider1: &mut T,
+    transform1: Transform,
+    collider2: &mut U,
+    transform2: Transform,
 ) -> Option<CollisionData> {
-    let tetra = gjk(
-        collider1,
-        collider2,
-        collider1.position() - collider2.position(),
-    )?;
+    collider1.transform(transform1);
+    collider2.transform(transform2);
+
+    let tetra = gjk(collider1, collider2, transform1.w - transform2.w)?;
+
+    collider1.transform(transform1.inverse_affine());
+    collider2.transform(transform2.inverse_affine());
 
     let faces = [(0, 1, 2), (0, 3, 1), (0, 2, 3), (1, 3, 2)];
 
@@ -171,26 +176,13 @@ pub struct CollisionData {
     pub depth: f32,
 }
 
-#[derive(Clone)]
-pub struct Moving {
-    pub velocity: Vector,
-    pub mass: f32,
-}
-
-impl Moving {
-    pub fn apply_impulse(&mut self, impulse: Vector) {
-        self.velocity += impulse / self.mass;
-    }
-}
-
 pub struct Sphere {
     pub position: Vector,
     pub radius: f32,
 }
 
-impl Collider for Sphere {
+impl Collidable for Sphere {
     fn support(&self, direction: Vector) -> Vector {
-        // should never happen
         if direction == Vector::zero_vector() {
             return self.position;
         }
@@ -198,8 +190,8 @@ impl Collider for Sphere {
         self.position + (direction.normalize() * self.radius)
     }
 
-    fn position(&self) -> Vector {
-        self.position
+    fn transform(&mut self, transform: Transform) {
+        self.position = transform * self.position
     }
 }
 
@@ -208,8 +200,10 @@ pub struct Cuboid {
     pub half_extents: Vector,
 }
 
-impl Collider for Cuboid {
+impl Collidable for Cuboid {
     fn support(&self, direction: Vector) -> Vector {
+        let direction = self.transform.inverse_affine() * direction;
+
         let sign_x = if direction.x >= 0.0 { 1.0 } else { -1.0 };
         let sign_y = if direction.y >= 0.0 { 1.0 } else { -1.0 };
         let sign_z = if direction.z >= 0.0 { 1.0 } else { -1.0 };
@@ -223,21 +217,18 @@ impl Collider for Cuboid {
         self.transform.w + support_point_local
     }
 
-    fn position(&self) -> Vector {
-        self.transform.w
+    fn transform(&mut self, transform: Transform) {
+        self.transform = self.transform * transform
     }
 }
 
-pub enum BvhNode {
-    Branch {
-        children: [u32; 2],
-        bounds: [Vector; 2],
-    },
-    Leaf {
-        collider: Box<dyn Collider>,
-    },
+#[derive(Default)]
+pub struct PhysicsWorld {
+    colliders: Vec<Box<dyn Collidable>>,
+    transforms: Vec<Transform>,
+    ids: Vec<usize>,
 }
 
-pub struct CollisionWorld {
-    pub map: Vec<BvhNode>,
+impl PhysicsWorld {
+    fn get_aabb(index: usize) -> Vector {}
 }

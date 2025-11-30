@@ -1,8 +1,7 @@
-use crate::{physics::CollisionWorld, player::Player};
+use crate::player::Player;
 
 pub struct World {
-    pub players: Vec<Player>,
-    pub map: CollisionWorld,
+    players: Vec<Player>,
 
     tick: u32,
 
