@@ -1,8 +1,12 @@
-use crate::math::{Transform, Vector};
+use crate::{
+    math::{Transform, Vector},
+    utility::SparseSetIndexer,
+};
 
 pub trait Collidable {
     fn support(&self, direction: Vector) -> Vector;
     fn transform(&mut self, transform: Transform);
+    fn radius(&self) -> f32;
 }
 
 enum Simplex {
@@ -193,6 +197,10 @@ impl Collidable for Sphere {
     fn transform(&mut self, transform: Transform) {
         self.position = transform * self.position
     }
+
+    fn radius(&self) -> f32 {
+        self.radius
+    }
 }
 
 pub struct Cuboid {
@@ -220,15 +228,86 @@ impl Collidable for Cuboid {
     fn transform(&mut self, transform: Transform) {
         self.transform = self.transform * transform
     }
+
+    fn radius(&self) -> f32 {
+        self.half_extents.length()
+    }
+}
+
+pub struct PhysicsState {
+    transform: Transform,
+
+    linear_velocity: Vector,
+    angular_velocity: Vector,
+
+    mass: f32,
+    moment: f32,
+}
+
+impl PhysicsState {
+    pub fn new(mass: f32, moment: f32) -> Self {
+        PhysicsState {
+            transform: Transform::default(),
+            linear_velocity: Vector::zero_vector(),
+            angular_velocity: Vector::zero_vector(),
+            mass,
+            moment,
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct PhysicsWorld {
     colliders: Vec<Box<dyn Collidable>>,
-    transforms: Vec<Transform>,
-    ids: Vec<usize>,
+    states: Vec<PhysicsState>,
+    indexer: SparseSetIndexer,
+
+    planes: Vec<Vector>,
 }
 
 impl PhysicsWorld {
-    fn get_aabb(index: usize) -> Vector {}
+    pub fn insert(&mut self, id: usize, collider: Box<dyn Collidable>, mass: f32, moment: f32) {
+        self.indexer.reserve(id);
+        self.colliders.push(collider);
+        self.states.push(PhysicsState::new(mass, moment));
+    }
+
+    pub fn remove(&mut self, id: usize) {
+        let index = self.indexer.delete(id);
+
+        self.colliders[index] = self.colliders.pop();
+        self.states[index] = self.states.pop();
+    }
+
+    fn get_radius(&mut self, id: usize) -> f32 {
+        let index = self.indexer.get(id);
+
+        self.colliders[index].radius()
+    }
+
+    pub fn update(&mut self, dt: f32) {
+        for mut x in self.states {
+            x.transform.w += x.linear_velocity;
+        }
+    }
+
+    pub fn apply_linear_impulse(&mut self, id: usize, impulse: Vector) {
+        let index = self.indexer.get(id);
+
+        let mut state = self.states[index];
+        state.linear_velocity += impulse / state.mass;
+    }
+
+    pub fn apply_angular_impulse(&mut self, id: usize, impulse: Vector) {
+        let index = self.indexer.get(id);
+
+        let mut state = self.states[index];
+        state.angular_velocity += impulse / state.moment;
+    }
+
+    pub fn apply_transform(&mut self, id: usize, transform: Transform) {
+        let index = self.indexer.get(id);
+
+        self.states[index].transform = transform
+    }
 }
