@@ -28,11 +28,11 @@ impl Vector {
         Vector { x, y, z, w }
     }
 
-    pub fn from_point(x: f32, y: f32, z: f32) -> Self {
+    pub const fn from_point(x: f32, y: f32, z: f32) -> Self {
         Vector { x, y, z, w: 1.0 }
     }
 
-    pub fn from_vector(x: f32, y: f32, z: f32) -> Self {
+    pub const fn from_vector(x: f32, y: f32, z: f32) -> Self {
         Vector { x, y, z, w: 0.0 }
     }
 
@@ -133,250 +133,73 @@ impl Vector {
     pub fn project_onto(self, other: Vector) -> Vector {
         other.dot(self) * other
     }
-}
 
-impl Transform {
-    pub fn identity() -> Self {
-        Transform {
-            x: Vector::new(1.0, 0.0, 0.0, 0.0),
-            y: Vector::new(0.0, 1.0, 0.0, 0.0),
-            z: Vector::new(0.0, 0.0, 1.0, 0.0),
-            w: Vector::new(0.0, 0.0, 0.0, 1.0),
+    pub fn identity_quaternion() -> Self {
+        Vector {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
         }
     }
 
-    pub fn translation(x: f32, y: f32, z: f32) -> Self {
-        Transform {
-            x: Vector::new(1.0, 0.0, 0.0, 0.0),
-            y: Vector::new(0.0, 1.0, 0.0, 0.0),
-            z: Vector::new(0.0, 0.0, 1.0, 0.0),
-            w: Vector::new(x, y, z, 1.0),
+    pub fn from_axis_angle(axis: Vector, angle: f32) -> Self {
+        let half_angle = angle * 0.5;
+        let s = half_angle.sin();
+        let c = half_angle.cos();
+
+        Vector {
+            x: axis.x * s,
+            y: axis.y * s,
+            z: axis.z * s,
+            w: c,
         }
     }
 
-    pub fn scaling(x: f32, y: f32, z: f32) -> Self {
-        Transform {
-            x: Vector::new(x, 0.0, 0.0, 0.0),
-            y: Vector::new(0.0, y, 0.0, 0.0),
-            z: Vector::new(0.0, 0.0, z, 0.0),
-            w: Vector::new(0.0, 0.0, 0.0, 1.0),
+    pub fn geometric(self, other: Vector) -> Vector {
+        Vector {
+            w: self.w * other.w - self.x * other.x - self.y * other.y - self.z * other.z,
+            x: self.w * other.x + self.x * other.w + self.y * other.z - self.z * other.y,
+            y: self.w * other.y - self.x * other.z + self.y * other.w + self.z * other.x,
+            z: self.w * other.z + self.x * other.y - self.y * other.x + self.z * other.w,
         }
     }
 
-    pub fn uniform_scaling(scale: f32) -> Self {
-        Self::scaling(scale, scale, scale)
-    }
-
-    pub fn rotation_x(angle: f32) -> Self {
-        let c = angle.cos();
-        let s = angle.sin();
-        Transform {
-            x: Vector::new(1.0, 0.0, 0.0, 0.0),
-            y: Vector::new(0.0, c, s, 0.0),
-            z: Vector::new(0.0, -s, c, 0.0),
-            w: Vector::new(0.0, 0.0, 0.0, 1.0),
+    pub fn conjugate(self) -> Vector {
+        Vector {
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+            w: self.w,
         }
     }
 
-    pub fn rotation_y(angle: f32) -> Self {
-        let c = angle.cos();
-        let s = angle.sin();
-        Transform {
-            x: Vector::new(c, 0.0, -s, 0.0),
-            y: Vector::new(0.0, 1.0, 0.0, 0.0),
-            z: Vector::new(s, 0.0, c, 0.0),
-            w: Vector::new(0.0, 0.0, 0.0, 1.0),
+    pub fn inverse(self) -> Vector {
+        let len_sq = self.dot(self);
+        if len_sq > EPSILON {
+            self.conjugate() / len_sq
+        } else {
+            Self::zero_vector() // Handle zero-length quaternion edge case
         }
     }
 
-    pub fn rotation_z(angle: f32) -> Self {
-        let c = angle.cos();
-        let s = angle.sin();
-        Transform {
-            x: Vector::new(c, s, 0.0, 0.0),
-            y: Vector::new(-s, c, 0.0, 0.0),
-            z: Vector::new(0.0, 0.0, 1.0, 0.0),
-            w: Vector::new(0.0, 0.0, 0.0, 1.0),
-        }
+    pub fn rotate_vector(self, v: Vector) -> Vector {
+        // Optimized implementation: v' = v + 2 * cross(q_xyz, cross(q_xyz, v) + q_w * v)
+        let q_xyz = Vector::from_vector(self.x, self.y, self.z);
+        let t = q_xyz.cross(v) * 2.0;
+        v + (t * self.w) + q_xyz.cross(t)
     }
 
-    pub fn look_at(eye: Vector, target: Vector, up: Vector) -> Self {
-        let f = (eye - target).normalize();
-        let r = up.cross(f).normalize();
-        let u = f.cross(r);
+    pub fn from_euler(roll: f32, pitch: f32, yaw: f32) -> Self {
+        let (sr, cr) = (roll * 0.5).sin_cos();
+        let (sp, cp) = (pitch * 0.5).sin_cos();
+        let (sy, cy) = (yaw * 0.5).sin_cos();
 
-        Transform {
-            x: Vector::new(r.x, u.x, f.x, 0.0),
-            y: Vector::new(r.y, u.y, f.y, 0.0),
-            z: Vector::new(r.z, u.z, f.z, 0.0),
-
-            w: Vector::new(-r.dot(eye), -u.dot(eye), -f.dot(eye), 1.0),
-        }
-    }
-
-    pub fn perspective(fov_y_radians: f32, aspect_ratio: f32, z_near: f32, z_far: f32) -> Self {
-        let f = 1.0 / (fov_y_radians / 2.0).tan();
-        let range_inv = 1.0 / (z_near - z_far);
-
-        Transform {
-            x: Vector::new(f / aspect_ratio, 0.0, 0.0, 0.0),
-            y: Vector::new(0.0, f, 0.0, 0.0),
-            z: Vector::new(0.0, 0.0, (z_near + z_far) * range_inv, -1.0),
-            w: Vector::new(0.0, 0.0, z_near * z_far * range_inv * 2.0, 0.0),
-        }
-    }
-
-    pub fn orthographic(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> Self {
-        let w = right - left;
-        let h = top - bottom;
-        let d = near - far;
-
-        Transform {
-            x: Vector::new(2.0 / w, 0.0, 0.0, 0.0),
-            y: Vector::new(0.0, 2.0 / h, 0.0, 0.0),
-            z: Vector::new(0.0, 0.0, 2.0 / d, 0.0),
-            w: Vector::new(
-                -(right + left) / w,
-                -(top + bottom) / h,
-                (near + far) / d,
-                1.0,
-            ),
-        }
-    }
-
-    pub fn transpose(self) -> Self {
-        Transform {
-            x: Vector::new(self.x.x, self.y.x, self.z.x, self.w.x),
-            y: Vector::new(self.x.y, self.y.y, self.z.y, self.w.y),
-            z: Vector::new(self.x.z, self.y.z, self.z.z, self.w.z),
-            w: Vector::new(self.x.w, self.y.w, self.z.w, self.w.w),
-        }
-    }
-
-    pub fn get(&self, col: usize, row: usize) -> f32 {
-        match col {
-            0 => self.x[row],
-            1 => self.y[row],
-            2 => self.z[row],
-            3 => self.w[row],
-            _ => panic!("Column index out of bounds"),
-        }
-    }
-
-    pub fn right_vector(&self) -> Vector {
-        self.x.to_vector()
-    }
-    pub fn up_vector(&self) -> Vector {
-        self.y.to_vector()
-    }
-    pub fn forward_vector(&self) -> Vector {
-        -self.z.to_vector()
-    }
-    pub fn position(&self) -> Vector {
-        self.w.to_point()
-    }
-
-    pub fn inverse_rotation(self) -> Self {
-        Transform {
-            x: Vector::new(self.x.x, self.y.x, self.z.x, 0.0),
-            y: Vector::new(self.x.y, self.y.y, self.z.y, 0.0),
-            z: Vector::new(self.x.z, self.y.z, self.z.z, 0.0),
-            w: Vector::new(0.0, 0.0, 0.0, 1.0),
-        }
-    }
-
-    pub fn inverse_affine(self) -> Self {
-        let rotation_transpose = Transform {
-            x: Vector::new(self.x.x, self.y.x, self.z.x, 0.0),
-            y: Vector::new(self.x.y, self.y.y, self.z.y, 0.0),
-            z: Vector::new(self.x.z, self.y.z, self.z.z, 0.0),
-            w: Vector::new(0.0, 0.0, 0.0, 1.0),
-        };
-
-        let mut t_inv = Vector::new(-self.w.x, -self.w.y, -self.w.z, 1.0);
-        t_inv = rotation_transpose * t_inv;
-
-        Transform {
-            x: rotation_transpose.x.to_vector(),
-            y: rotation_transpose.y.to_vector(),
-            z: rotation_transpose.z.to_vector(),
-            w: Vector::new(t_inv.x, t_inv.y, t_inv.z, 1.0),
-        }
-    }
-
-    /// Please note that this function is rather __expensive__, and that for most cases `inverse_affine` is enough
-    pub fn inverse(&self) -> Option<Self> {
-        let c0 = self.x;
-        let c1 = self.y;
-        let c2 = self.z;
-        let c3 = self.w;
-
-        let s0 = c0.x * c1.y - c1.x * c0.y;
-        let s1 = c0.x * c1.z - c1.x * c0.z;
-        let s2 = c0.x * c1.w - c1.x * c0.w;
-        let s3 = c0.y * c1.z - c1.y * c0.z;
-        let s4 = c0.y * c1.w - c1.y * c0.w;
-        let s5 = c0.z * c1.w - c1.z * c0.w;
-
-        let c5 = c2.z * c3.w - c3.z * c2.w;
-        let c4 = c2.y * c3.w - c3.y * c2.w;
-        let c3_val = c2.y * c3.z - c3.y * c2.z;
-        let c2_val = c2.x * c3.w - c3.x * c2.w;
-        let c1_val = c2.x * c3.z - c3.x * c2.z;
-        let c0_val = c2.x * c3.y - c3.x * c2.y;
-
-        let det = s0 * c5 - s1 * c4 + s2 * c3_val + s3 * c2_val - s4 * c1_val + s5 * c0_val;
-
-        if det.abs() < EPSILON {
-            return None;
-        }
-
-        let inv_det = 1.0 / det;
-
-        let x_x = (c1.y * c5 - c1.z * c4 + c1.w * c3_val) * inv_det;
-        let x_y = (-c1.x * c5 + c1.z * c2_val - c1.w * c1_val) * inv_det;
-        let x_z = (c1.x * c4 - c1.y * c2_val + c1.w * c0_val) * inv_det;
-        let x_w = (-c1.x * c3_val + c1.y * c1_val - c1.z * c0_val) * inv_det;
-
-        let y_x = (-c0.y * c5 + c0.z * c4 - c0.w * c3_val) * inv_det;
-        let y_y = (c0.x * c5 - c0.z * c2_val + c0.w * c1_val) * inv_det;
-        let y_z = (-c0.x * c4 + c0.y * c2_val - c0.w * c0_val) * inv_det;
-        let y_w = (c0.x * c3_val - c0.y * c1_val + c0.z * c0_val) * inv_det;
-
-        let z_x = (c3.y * s5 - c3.z * s4 + c3.w * s3) * inv_det;
-        let z_y = (-c3.x * s5 + c3.z * s2 - c3.w * s1) * inv_det;
-        let z_z = (c3.x * s4 - c3.y * s2 + c3.w * s0) * inv_det;
-        let z_w = (-c3.x * s3 + c3.y * s1 - c3.z * s0) * inv_det;
-
-        let w_x = (-c2.y * s5 + c2.z * s4 - c2.w * s3) * inv_det;
-        let w_y = (c2.x * s5 - c2.z * s2 + c2.w * s1) * inv_det;
-        let w_z = (-c2.x * s4 + c2.y * s2 - c2.w * s0) * inv_det;
-        let w_w = (c2.x * s3 - c2.y * s1 + c2.z * s0) * inv_det;
-
-        Some(Transform {
-            x: Vector::new(x_x, x_y, x_z, x_w),
-            y: Vector::new(y_x, y_y, y_z, y_w),
-            z: Vector::new(z_x, z_y, z_z, z_w),
-            w: Vector::new(w_x, w_y, w_z, w_w),
-        })
-    }
-}
-
-impl Mul<Vector> for Transform {
-    type Output = Vector;
-    fn mul(self, v: Vector) -> Vector {
-        self.x * v.x + self.y * v.y + self.z * v.z + self.w * v.w
-    }
-}
-
-impl Mul<Transform> for Transform {
-    type Output = Transform;
-    fn mul(self, other: Transform) -> Transform {
-        Transform {
-            x: self * other.x,
-            y: self * other.y,
-            z: self * other.z,
-            w: self * other.w,
+        Vector {
+            x: sr * cp * cy - cr * sp * sy,
+            y: cr * sp * cy + sr * cp * sy,
+            z: cr * cp * sy - sr * sp * cy,
+            w: cr * cp * cy + sr * sp * sy,
         }
     }
 }
@@ -502,37 +325,40 @@ impl IndexMut<usize> for Vector {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Frustum {
-    // normals point inward
-    pub planes: [Vector; 6],
+#[derive(Copy, Clone)]
+pub struct BoundingBox {
+    min: Vector,
+    max: Vector,
 }
 
-impl Frustum {
-    pub fn from_matrix(m: Transform) -> Self {
-        let t = m.transpose();
-
-        let row0 = t.x;
-        let row1 = t.y;
-        let row2 = t.z;
-        let row3 = t.w;
-
-        let normalize_plane = |p: Vector| {
-            let len = (p.x * p.x + p.y * p.y + p.z * p.z).sqrt();
-            if len > EPSILON { p / len } else { p }
-        };
-
-        Frustum {
-            planes: [
-                normalize_plane(row3 + row0), // left
-                normalize_plane(row3 - row0), // right
-                normalize_plane(row3 + row1), // bottom
-                normalize_plane(row3 - row1), // top
-                normalize_plane(row3 + row2), // near
-                normalize_plane(row3 - row2), // far
-            ],
-        }
+impl BoundingBox {
+    pub fn contains(&self, other: &BoundingBox) -> bool {
+        self.min.x < other.min.x
+            && self.min.y < other.min.y
+            && self.min.z < other.min.z
+            && self.max.x > other.max.x
+            && self.max.y > other.max.y
+            && self.max.z > other.max.z
     }
 
-    pub fn intersects_sphere(&self, position: Vector, radius: f32) -> bool {}
+    pub fn intersects(&self, other: &BoundingBox) -> bool {
+        (self.min.x <= other.max.x && self.max.x >= other.min.x)
+            && (self.min.y <= other.max.y && self.max.y >= other.min.y)
+            && (self.min.z <= other.max.z && self.max.z >= other.min.z)
+    }
+
+    pub fn union(self, other: BoundingBox) -> BoundingBox {
+        Self {
+            min: Vector::from_point(
+                self.min.x.min(other.min.x),
+                self.min.y.min(other.min.y),
+                self.min.z.min(other.min.z),
+            ),
+            max: Vector::from_point(
+                self.max.x.max(other.max.x),
+                self.max.y.max(other.max.y),
+                self.max.z.max(other.max.z),
+            ),
+        }
+    }
 }

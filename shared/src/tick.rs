@@ -1,8 +1,4 @@
-use crate::player::Player;
-
-pub struct World {
-    players: Vec<Player>,
-
+pub struct Ticker {
     tick: u32,
 
     warp: f32,
@@ -11,17 +7,15 @@ pub struct World {
     accumulator: f32,
 }
 
-impl World {
-    pub fn run(&mut self, dt: f32) {
+impl Ticker {
+    pub fn update<T: FnMut(u32) -> ()>(&mut self, dt: f32, mut function: T) {
         self.accumulator += dt;
 
         while self.accumulator > self.step_size + self.warp {
             self.accumulator -= self.step_size + self.warp;
             self.tick += 1;
 
-            for x in &mut self.players {
-                x.update(dt, &self.map)
-            }
+            function(self.tick)
         }
     }
 

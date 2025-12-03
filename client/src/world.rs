@@ -1,4 +1,4 @@
-use brawl_game_shared::world::World;
+use brawl_game_shared::tick::Ticker;
 use raylib::{
     RaylibHandle, camera::Camera, color::Color, input, math::Vector3, models::Model,
     prelude::RaylibDraw3D,
@@ -9,12 +9,7 @@ use crate::math::to_raylib;
 pub const CAMERA_DISTANCE: f32 = 10.0;
 
 pub struct ClientWorld {
-    world: World,
-
-    player_models: Vec<Model>,
     player_index: Option<usize>,
-
-    map_model: Model,
 
     camera: Camera,
 }
@@ -32,7 +27,7 @@ impl ClientWorld {
     pub fn update(&mut self, handle: &RaylibHandle) {
         let dt = handle.get_frame_time();
 
-        self.world.run(dt);
+        self.world.update(dt);
 
         if let Some(index) = self.player_index {
             let player = &mut self.world.players[index];

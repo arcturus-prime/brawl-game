@@ -14,4 +14,3 @@ path = "server"
 [[bin]]
 name = "client"
 path = "client"
-
