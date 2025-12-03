@@ -1,8 +1,8 @@
-use brawl_game_shared::tick::Ticker;
 use raylib::{
     RaylibHandle, camera::Camera, color::Color, input, math::Vector3, models::Model,
     prelude::RaylibDraw3D,
 };
+use shared::tick::Ticker;
 
 use crate::math::to_raylib;
 
