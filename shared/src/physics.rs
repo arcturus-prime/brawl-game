@@ -1,5 +1,5 @@
 use crate::{
-    math::{BoundingBox, Vector},
+    math::{BoundingBox, VECTOR_X, VECTOR_Y, VECTOR_Z, Vector},
     utility::SparseSet,
 };
 
@@ -7,6 +7,7 @@ pub trait Collidable {
     fn support(&self, position: Vector, rotation: Vector, direction: Vector) -> Vector;
 }
 
+#[derive(Default)]
 pub struct ConvexHull {
     points: Vec<Vector>,
 }
@@ -17,6 +18,7 @@ impl Collidable for ConvexHull {
     }
 }
 
+#[derive(Default)]
 pub struct Cuboid {
     size: Vector,
 }
@@ -27,10 +29,44 @@ impl Collidable for Cuboid {
     }
 }
 
+#[derive(Default)]
 pub struct Body<T: Collidable> {
     pub collider: T,
     pub rotation: Vector,
     pub position: Vector,
+}
+
+impl<T: Collidable> Body<T> {
+    pub fn get_aabb(&self) -> BoundingBox {
+        let directions = [
+            VECTOR_X, -VECTOR_X, VECTOR_Y, -VECTOR_Y, VECTOR_Z, -VECTOR_Z,
+        ];
+
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        let mut min_z = f32::INFINITY;
+        let mut max_z = f32::NEG_INFINITY;
+
+        for direction in &directions {
+            let point = self
+                .collider
+                .support(self.position, self.rotation, *direction);
+
+            min_x = min_x.min(point.x);
+            max_x = max_x.max(point.x);
+            min_y = min_y.min(point.y);
+            max_y = max_y.max(point.y);
+            min_z = min_z.min(point.z);
+            max_z = max_z.max(point.z);
+        }
+
+        BoundingBox {
+            min: Vector::from_point(min_x, min_y, min_z),
+            max: Vector::from_point(max_x, max_y, max_z),
+        }
+    }
 }
 
 enum Simplex {
@@ -40,7 +76,7 @@ enum Simplex {
     Tetrahedron(Vector, Vector, Vector, Vector),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CollisionData {
     pub position: Vector,
     pub normal: Vector,
@@ -201,6 +237,7 @@ impl<T: Collidable> Body<T> {
     }
 }
 
+#[derive(Default)]
 pub struct DynamicBody<T: Collidable> {
     pub body: Body<T>,
     pub velocity: Vector,
@@ -217,19 +254,56 @@ impl<T: Collidable> DynamicBody<T> {
     }
 }
 
-pub struct PhysicsWorld {
-    pub static_bodies: SparseSet<Body<Cuboid>>,
-    pub dynamic_bodies: SparseSet<DynamicBody<ConvexHull>>,
-
-    static_tree: Vec<BoundingBox>,
+#[derive(Default)]
+pub struct PhysicsWorld<S: Collidable, D: Collidable> {
+    pub static_bodies: SparseSet<Body<S>>,
+    pub dynamic_bodies: SparseSet<DynamicBody<D>>,
 }
 
-impl PhysicsWorld {
+impl<S: Collidable, D: Collidable> PhysicsWorld<S, D> {
     pub fn update(&mut self, dt: f32) {
         for (_, body) in self.dynamic_bodies.iter_mut() {
             body.update(dt);
         }
+
+        self.narrow_phase();
     }
 
-    pub fn rebuild_static(&mut self) {}
+    fn narrow_phase(&mut self) {
+        let mut collisions = vec![];
+        // naive solution for now
+        for (id, dynamic_body) in self.dynamic_bodies.iter() {
+            for (other_id, static_body) in self.static_bodies.iter() {
+                if id == other_id {
+                    continue;
+                }
+
+                let Some(collision) = dynamic_body.body.collides_with(static_body) else {
+                    continue;
+                };
+
+                collisions.push((collision, *id, *other_id))
+            }
+
+            for (other_id, other_dynamic_body) in self.dynamic_bodies.iter() {
+                if id == other_id {
+                    continue;
+                }
+
+                let Some(collision) = dynamic_body.body.collides_with(&other_dynamic_body.body)
+                else {
+                    continue;
+                };
+
+                collisions.push((collision, *id, *other_id))
+            }
+        }
+
+        for (collision, id, other_id) in collisions {
+            let body = &mut self.dynamic_bodies[id];
+
+            body.body.position -= collision.normal * collision.depth;
+            body.velocity -= 2.0 * collision.normal * collision.normal.dot(body.velocity);
+        }
+    }
 }

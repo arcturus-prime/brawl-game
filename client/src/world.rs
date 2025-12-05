@@ -1,26 +1,70 @@
 use raylib::{
-    RaylibHandle, camera::Camera, color::Color, input, math::Vector3, models::Model,
-    prelude::RaylibDraw3D,
+    RaylibHandle,
+    camera::Camera,
+    color::Color,
+    models::Model,
+    prelude::{RaylibDraw3D, RaylibDrawHandle, RaylibMode3DExt},
 };
-use shared::tick::Ticker;
+use shared::{
+    math::{VECTOR_X, Vector},
+    physics::{Cuboid, PhysicsWorld},
+    player::PlayerData,
+    tick::Ticker,
+    utility::SparseSet,
+};
 
-use crate::math::to_raylib;
+use crate::math::{camera_from_position_rotation, to_raylib};
 
 pub const CAMERA_DISTANCE: f32 = 10.0;
 
 pub struct ClientWorld {
-    player_index: Option<usize>,
+    local_player: Option<usize>,
+
+    world: PhysicsWorld<Cuboid, Cuboid>,
+
+    players: SparseSet<PlayerData>,
+    models: SparseSet<Model>,
 
     camera: Camera,
+
+    ticker: Ticker,
 }
 
 impl ClientWorld {
-    pub fn render<T: RaylibDraw3D>(&self, mut drawer: T) {
-        drawer.draw_model(&self.map_model, Vector3::zero(), 1.0, Color::RED);
+    pub fn new() -> Self {
+        Self {
+            local_player: None,
+            players: SparseSet::default(),
+            world: PhysicsWorld::default(),
+            models: SparseSet::default(),
+            camera: camera_from_position_rotation(
+                Vector::zero_point(),
+                Vector::identity_quaternion(),
+                60.0,
+            ),
+            ticker: Ticker::default(),
+        }
+    }
 
-        for (x, i) in self.player_models.iter().zip(0..) {
-            let player_position = self.world.players[i].physical.position;
-            drawer.draw_model(x, to_raylib(player_position), 1.0, Color::BLUE);
+    pub fn render(&self, mut drawer: RaylibDrawHandle) {
+        let mut three_d = drawer.begin_mode3D(self.camera);
+
+        for (id, body) in self.world.dynamic_bodies.iter() {
+            three_d.draw_model(
+                &self.models[*id],
+                to_raylib(body.body.position),
+                1.0,
+                Color::WHITE,
+            );
+        }
+
+        for (id, body) in self.world.static_bodies.iter() {
+            three_d.draw_model(
+                &self.models[*id],
+                to_raylib(body.position),
+                1.0,
+                Color::WHITE,
+            );
         }
     }
 
@@ -29,12 +73,13 @@ impl ClientWorld {
 
         self.world.update(dt);
 
-        if let Some(index) = self.player_index {
-            let player = &mut self.world.players[index];
+        if let Some(id) = self.local_player {
+            let body = &self.world.dynamic_bodies[id];
 
-            self.camera.position =
-                to_raylib(player.physical.position - player.forward * CAMERA_DISTANCE);
-            self.camera.target = to_raylib(player.physical.position);
+            self.camera.position = to_raylib(
+                body.body.position - body.body.rotation.geometric(VECTOR_X) * CAMERA_DISTANCE,
+            );
+            self.camera.target = to_raylib(body.body.position);
         }
     }
 }

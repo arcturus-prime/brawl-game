@@ -327,8 +327,8 @@ impl IndexMut<usize> for Vector {
 
 #[derive(Copy, Clone)]
 pub struct BoundingBox {
-    min: Vector,
-    max: Vector,
+    pub min: Vector,
+    pub max: Vector,
 }
 
 impl BoundingBox {

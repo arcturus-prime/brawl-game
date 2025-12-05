@@ -1,3 +1,4 @@
+#[derive(Default)]
 pub struct Ticker {
     tick: u32,
 

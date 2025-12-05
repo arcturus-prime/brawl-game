@@ -1,11 +1,24 @@
-use std::{iter::Zip, slice::Iter, slice::IterMut};
+use std::{
+    iter::Zip,
+    ops::{Index, IndexMut},
+    slice::{Iter, IterMut},
+};
 
-#[derive(Default)]
 pub struct SparseSet<T> {
     id_to_index: Vec<usize>,
     index_to_id: Vec<usize>,
 
     data: Vec<T>,
+}
+
+impl<T> Default for SparseSet<T> {
+    fn default() -> Self {
+        Self {
+            id_to_index: Default::default(),
+            index_to_id: Default::default(),
+            data: Default::default(),
+        }
+    }
 }
 
 impl<T> SparseSet<T> {
@@ -36,6 +49,40 @@ impl<T> SparseSet<T> {
 
     pub fn iter_mut<'a>(&'a mut self) -> SparseSetIterMut<'a, T> {
         SparseSetIterMut::new(self)
+    }
+
+    pub fn get(&self, id: usize) -> Option<&T> {
+        if id > self.id_to_index.len() || self.id_to_index[id] == usize::MAX {
+            return None;
+        }
+
+        Some(&self.data[self.id_to_index[id]])
+    }
+
+    pub fn get_mut(&mut self, id: usize) -> Option<&mut T> {
+        if id > self.id_to_index.len() || self.id_to_index[id] == usize::MAX {
+            return None;
+        }
+
+        Some(&mut self.data[self.id_to_index[id]])
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+}
+
+impl<T> Index<usize> for SparseSet<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.data[self.id_to_index[index]]
+    }
+}
+
+impl<T> IndexMut<usize> for SparseSet<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.data[self.id_to_index[index]]
     }
 }
 

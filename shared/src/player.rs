@@ -1,7 +1,6 @@
-use crate::{
-    math::Vector,
-    physics::{ConvexHull, DynamicBody},
-};
+use std::collections::BTreeMap;
+
+use crate::{math::Vector, utility::SparseSet};
 
 #[derive(Default, Clone)]
 pub struct InputState {
@@ -9,7 +8,8 @@ pub struct InputState {
     pub throttle: f32,
 }
 
-pub struct Player {
+#[derive(Default)]
+pub struct PlayerData {
     pub health: f32,
-    pub body: DynamicBody<ConvexHull>,
+    pub input_history: BTreeMap<u32, InputState>,
 }
