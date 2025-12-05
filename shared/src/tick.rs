@@ -9,14 +9,14 @@ pub struct Ticker {
 }
 
 impl Ticker {
-    pub fn update<T: FnMut(u32) -> ()>(&mut self, dt: f32, mut function: T) {
+    pub fn update<T: FnMut(u32, f32) -> ()>(&mut self, dt: f32, mut function: T) {
         self.accumulator += dt;
 
         while self.accumulator > self.step_size + self.warp {
             self.accumulator -= self.step_size + self.warp;
             self.tick += 1;
 
-            function(self.tick)
+            function(self.tick, self.step_size)
         }
     }
 
