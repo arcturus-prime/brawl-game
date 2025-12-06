@@ -1,46 +1,74 @@
 use raylib::{
     RaylibHandle, RaylibThread,
-    camera::Camera,
     color::Color,
-    models::{Mesh, Model, RaylibMesh},
+    models::{Mesh, Model, RaylibMesh, RaylibModel},
     prelude::{RaylibDraw, RaylibDraw3D, RaylibMode3DExt},
 };
 use shared::{
-    math::{VECTOR_X, VECTOR_Y, VECTOR_Z, Vector},
-    physics::{Cuboid, DynamicBody, PhysicsWorld},
+    math::{Quaternion, Transform, VECTOR_X, Vector3},
+    physics::{Cuboid, Moment},
     player::PlayerData,
     tick::Ticker,
     utility::{EntityReserver, SparseSet},
 };
 
-use crate::math::{camera_from_position_rotation, to_raylib};
+use crate::math::{camera_from_position_rotation, quat_to_raylib, vec_to_raylib};
 
 mod math;
 
-const CAMERA_DISTANCE: f32 = 10.0;
+struct RaylibDrawContext<'a> {
+    handle: &'a mut RaylibHandle,
+    thread: &'a RaylibThread,
+}
+
+impl<'a> RaylibDrawContext<'a> {
+    pub fn new(handle: &'a mut RaylibHandle, thread: &'a RaylibThread) -> Self {
+        Self { handle, thread }
+    }
+}
 
 fn create_player(
-    handle: &mut RaylibHandle,
-    thread: &RaylibThread,
+    context: &mut RaylibDrawContext,
+    transforms: &mut SparseSet<Transform>,
     models: &mut SparseSet<Model>,
     players: &mut SparseSet<PlayerData>,
-    world: &mut PhysicsWorld<Cuboid, Cuboid>,
+    colliders: &mut SparseSet<Cuboid>,
+    moment: &mut SparseSet<Moment>,
     id: usize,
 ) {
-    let mesh = Mesh::gen_mesh_cube(thread, 2.0, 2.0, 2.0);
+    let mesh = Mesh::gen_mesh_cube(context.thread, 2.0, 2.0, 2.0);
 
     models.insert(
         id,
-        handle
-            .load_model_from_mesh(thread, unsafe { mesh.make_weak() })
+        context
+            .handle
+            .load_model_from_mesh(context.thread, unsafe { mesh.make_weak() })
             .expect("Could not load model"),
     );
-
     players.insert(id, PlayerData::default());
-    world.dynamic_bodies.insert(
+    moment.insert(id, Moment::new(5.0));
+    colliders.insert(id, Cuboid::new(2.0, 2.0, 2.0));
+    transforms.insert(id, Transform::identity());
+}
+
+fn create_static_object(
+    context: &mut RaylibDrawContext,
+    models: &mut SparseSet<Model>,
+    tranforms: &mut SparseSet<Transform>,
+    colliders: &mut SparseSet<Cuboid>,
+    id: usize,
+) {
+    let mesh = Mesh::gen_mesh_cube(context.thread, 2.0, 2.0, 6.0);
+
+    models.insert(
         id,
-        DynamicBody::new(Cuboid::new(Vector::from_vector(2.0, 2.0, 2.0)), 5.0),
+        context
+            .handle
+            .load_model_from_mesh(context.thread, unsafe { mesh.make_weak() })
+            .expect("Could not load model"),
     );
+    tranforms.insert(id, Transform::identity());
+    colliders.insert(id, Cuboid::new(2.0, 2.0, 6.0))
 }
 
 fn main() {
@@ -48,38 +76,65 @@ fn main() {
 
     let local_player = reserver.reserve();
 
-    let mut world: PhysicsWorld<Cuboid, Cuboid> = PhysicsWorld::default();
+    let mut colliders: SparseSet<Cuboid> = SparseSet::default();
     let mut players: SparseSet<PlayerData> = SparseSet::default();
     let mut models: SparseSet<Model> = SparseSet::default();
+    let mut momenta: SparseSet<Moment> = SparseSet::default();
+    let mut transforms: SparseSet<Transform> = SparseSet::default();
 
-    let mut camera: Camera =
-        camera_from_position_rotation(Vector::zero_point(), Vector::identity_quaternion(), 60.0);
+    let mut camera = camera_from_position_rotation(Vector3::zero(), Quaternion::identity(), 60.0);
     let mut ticker = Ticker::default();
 
     let (mut rl, thread) = raylib::init().size(640, 480).title("Brawl Game").build();
 
+    let mut context = RaylibDrawContext::new(&mut rl, &thread);
+
     create_player(
-        &mut rl,
-        &thread,
+        &mut context,
+        &mut transforms,
         &mut models,
         &mut players,
-        &mut world,
+        &mut colliders,
+        &mut momenta,
         local_player,
     );
 
+    let reference = reserver.reserve();
+    create_static_object(
+        &mut context,
+        &mut models,
+        &mut transforms,
+        &mut colliders,
+        reference,
+    );
+
+    transforms[reference].position = Vector3::new(10.0, 0.0, 0.0);
+
+    let mut theta = 0.0;
+    let mut azimuth = 0.0;
+
     while !rl.window_should_close() {
         let dt = rl.get_frame_time();
+        let delta = rl.get_mouse_delta();
 
-        // UPDATE
+        theta += delta.x * 0.01;
+        azimuth += delta.y * 0.01;
 
-        ticker.update(dt, |tick, dt| world.update(dt));
+        transforms[local_player].rotation = Quaternion::from_euler(0.0, azimuth, theta);
 
-        let body = &world.dynamic_bodies[local_player];
+        ticker.update(dt, |tick, dt| {
+            for (id, moment) in momenta.iter_mut() {
+                transforms[*id].position += moment.velocity * dt;
+            }
+        });
 
-        camera.position = to_raylib(
-            body.body.position - body.body.rotation.geometric(VECTOR_X) * CAMERA_DISTANCE,
+        let forward = transforms[local_player].rotation.rotate_vector(VECTOR_X);
+
+        camera = camera_from_position_rotation(
+            transforms[local_player].position - forward * 10.0,
+            transforms[local_player].rotation,
+            60.0,
         );
-        camera.target = to_raylib(body.body.position);
 
         // RENDER
 
@@ -87,12 +142,13 @@ fn main() {
         d.clear_background(Color::WHITE);
 
         let mut three_d = d.begin_mode3D(camera);
-        for (id, body) in world.dynamic_bodies.iter() {
-            three_d.draw_model(&models[*id], to_raylib(body.body.position), 1.0, Color::RED);
-        }
-
-        for (id, body) in world.static_bodies.iter() {
-            three_d.draw_model(&models[*id], to_raylib(body.position), 1.0, Color::RED);
+        for (id, model) in models.iter() {
+            three_d.draw_model(
+                model,
+                vec_to_raylib(transforms[*id].position),
+                1.0,
+                Color::RED,
+            );
         }
     }
 }
