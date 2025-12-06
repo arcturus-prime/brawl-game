@@ -7,9 +7,14 @@ pub trait Collidable {
     fn support(&self, position: Vector, rotation: Vector, direction: Vector) -> Vector;
 }
 
-#[derive(Default)]
 pub struct ConvexHull {
     points: Vec<Vector>,
+}
+
+impl ConvexHull {
+    pub fn new(points: Vec<Vector>) -> Self {
+        Self { points }
+    }
 }
 
 impl Collidable for ConvexHull {
@@ -18,9 +23,14 @@ impl Collidable for ConvexHull {
     }
 }
 
-#[derive(Default)]
 pub struct Cuboid {
     size: Vector,
+}
+
+impl Cuboid {
+    pub fn new(size: Vector) -> Self {
+        Self { size }
+    }
 }
 
 impl Collidable for Cuboid {
@@ -29,11 +39,20 @@ impl Collidable for Cuboid {
     }
 }
 
-#[derive(Default)]
 pub struct Body<T: Collidable> {
     pub collider: T,
     pub rotation: Vector,
     pub position: Vector,
+}
+
+impl<T: Collidable> Body<T> {
+    pub fn new(collider: T) -> Self {
+        Self {
+            collider,
+            rotation: Vector::identity_quaternion(),
+            position: Vector::zero_point(),
+        }
+    }
 }
 
 impl<T: Collidable> Body<T> {
@@ -76,7 +95,7 @@ enum Simplex {
     Tetrahedron(Vector, Vector, Vector, Vector),
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct CollisionData {
     pub position: Vector,
     pub normal: Vector,
@@ -237,7 +256,6 @@ impl<T: Collidable> Body<T> {
     }
 }
 
-#[derive(Default)]
 pub struct DynamicBody<T: Collidable> {
     pub body: Body<T>,
     pub velocity: Vector,
@@ -245,6 +263,14 @@ pub struct DynamicBody<T: Collidable> {
 }
 
 impl<T: Collidable> DynamicBody<T> {
+    pub fn new(collider: T, mass: f32) -> Self {
+        Self {
+            body: Body::new(collider),
+            velocity: Vector::zero_vector(),
+            mass,
+        }
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.body.position += self.velocity * dt;
     }
@@ -254,10 +280,18 @@ impl<T: Collidable> DynamicBody<T> {
     }
 }
 
-#[derive(Default)]
 pub struct PhysicsWorld<S: Collidable, D: Collidable> {
     pub static_bodies: SparseSet<Body<S>>,
     pub dynamic_bodies: SparseSet<DynamicBody<D>>,
+}
+
+impl<S: Collidable, D: Collidable> Default for PhysicsWorld<S, D> {
+    fn default() -> Self {
+        Self {
+            static_bodies: SparseSet::default(),
+            dynamic_bodies: SparseSet::default(),
+        }
+    }
 }
 
 impl<S: Collidable, D: Collidable> PhysicsWorld<S, D> {

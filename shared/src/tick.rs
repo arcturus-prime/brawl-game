@@ -1,4 +1,3 @@
-#[derive(Default)]
 pub struct Ticker {
     tick: u32,
 
@@ -6,6 +5,17 @@ pub struct Ticker {
     step_size: f32,
 
     accumulator: f32,
+}
+
+impl Default for Ticker {
+    fn default() -> Self {
+        Self {
+            tick: 0,
+            warp: 0.0,
+            step_size: 1.0 / 60.0,
+            accumulator: 0.0,
+        }
+    }
 }
 
 impl Ticker {

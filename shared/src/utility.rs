@@ -23,7 +23,7 @@ impl<T> Default for SparseSet<T> {
 
 impl<T> SparseSet<T> {
     pub fn insert(&mut self, id: usize, data: T) {
-        self.id_to_index.resize(id, 0);
+        self.id_to_index.resize(id + 1, 0);
 
         let index = self.index_to_id.len();
         self.id_to_index[id] = index;
@@ -129,6 +129,7 @@ impl<'a, T> Iterator for SparseSetIterMut<'a, T> {
     }
 }
 
+#[derive(Default)]
 pub struct EntityReserver {
     id: usize,
 }
