@@ -168,6 +168,26 @@ impl Quaternion {
         )
     }
 
+    pub fn to_axis_angle(self) -> (Vector3, f32) {
+        let quat = self.normalize();
+
+        if quat.w.abs() >= 1.0 - EPSILON {
+            return (VECTOR_X, 0.0);
+        }
+
+        let angle = 2.0 * quat.w.acos();
+        let s = (1.0 - quat.w * quat.w).sqrt();
+
+        let axis = if s < EPSILON {
+            // If s is too small, return arbitrary axis
+            VECTOR_X
+        } else {
+            Vector3::new(quat.x / s, quat.y / s, quat.z / s)
+        };
+
+        (axis, angle)
+    }
+
     pub fn from_euler(roll: f32, pitch: f32, yaw: f32) -> Self {
         let (sr, cr) = (roll * 0.5).sin_cos();
         let (sp, cp) = (pitch * 0.5).sin_cos();

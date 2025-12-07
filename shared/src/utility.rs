@@ -4,6 +4,7 @@ use std::{
     slice::{Iter, IterMut},
 };
 
+#[derive(Clone)]
 pub struct SparseSet<T> {
     id_to_index: Vec<usize>,
     index_to_id: Vec<usize>,
