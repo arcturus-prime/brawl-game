@@ -4,9 +4,9 @@ use raylib::{
     prelude::{RaylibDraw, RaylibDraw3D, RaylibMode3DExt},
 };
 use shared::{
-    math::{Quaternion, Transform, VECTOR_X, Vector3},
+    math::{Quaternion, Transform, VECTOR_X, VECTOR_Y, Vector3},
     physics::{Cuboid, Moment},
-    player::PlayerData,
+    player::{InputState, PlayerData},
     tick::Ticker,
     utility::{EntityReserver, SparseSet},
 };
@@ -18,6 +18,8 @@ use crate::{
 
 mod math;
 mod render;
+
+const LINEAR_DAMPENING: f32 = 0.99;
 
 pub struct World {
     transforms: SparseSet<Transform>,
@@ -86,8 +88,35 @@ fn create_orbit_camera(id: usize, target: usize, world: &mut World) {
     world.transforms.insert(id, Transform::identity());
 }
 
+fn get_current_input_state(context: &RaylibContext, camera_transform: &Transform) -> InputState {
+    let mut direction = Vector3::zero();
+
+    if context.handle.is_key_down(raylib::ffi::KeyboardKey::KEY_W) {
+        direction += VECTOR_X;
+    }
+
+    if context.handle.is_key_down(raylib::ffi::KeyboardKey::KEY_S) {
+        direction -= VECTOR_X;
+    }
+
+    if context.handle.is_key_down(raylib::ffi::KeyboardKey::KEY_A) {
+        direction += VECTOR_Y;
+    }
+
+    if context.handle.is_key_down(raylib::ffi::KeyboardKey::KEY_D) {
+        direction -= VECTOR_Y;
+    }
+
+    InputState {
+        want_direction: camera_transform
+            .rotation
+            .rotate_vector(direction.normalize()),
+        throttle: 1.0,
+    }
+}
+
 fn main() {
-    let (rl, thread) = raylib::init().size(640, 480).title("Brawl Game").build();
+    let (rl, thread) = raylib::init().size(1280, 720).title("Brawl Game").build();
 
     let mut context = RaylibContext { handle: rl, thread };
     let mut world = World::new();
@@ -118,6 +147,17 @@ fn main() {
         ticker.update(dt, |tick, dt| {
             for (id, moment) in world.momenta.iter_mut() {
                 world.transforms[*id].position += moment.velocity * dt;
+            }
+
+            let input = get_current_input_state(&context, &world.transforms[camera]);
+
+            world.players[local_player].set_input(tick, input);
+            world.players[local_player]
+                .apply_input(tick, &mut world.momenta[local_player])
+                .expect("Somehow the input of the current tick was not set");
+
+            for (id, moment) in world.momenta.iter_mut() {
+                moment.velocity *= LINEAR_DAMPENING
             }
         });
 

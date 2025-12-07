@@ -56,7 +56,7 @@ impl CameraData {
                 theta,
                 azimuth,
                 distance,
-                target,
+                ..
             } => {
                 *theta += input.delta_x;
                 *azimuth += input.delta_y;
