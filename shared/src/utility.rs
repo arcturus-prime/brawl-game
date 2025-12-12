@@ -2,6 +2,7 @@ use std::{
     iter::Zip,
     ops::{Index, IndexMut},
     slice::{Iter, IterMut},
+    usize,
 };
 
 #[derive(Clone)]
@@ -24,7 +25,7 @@ impl<T> Default for SparseSet<T> {
 
 impl<T> SparseSet<T> {
     pub fn insert(&mut self, id: usize, data: T) {
-        self.id_to_index.resize(id + 1, 0);
+        self.id_to_index.resize(id + 1, usize::MAX);
 
         let index = self.index_to_id.len();
         self.id_to_index[id] = index;
@@ -53,7 +54,7 @@ impl<T> SparseSet<T> {
     }
 
     pub fn get(&self, id: usize) -> Option<&T> {
-        if id > self.id_to_index.len() || self.id_to_index[id] == usize::MAX {
+        if id >= self.id_to_index.len() || self.id_to_index[id] == usize::MAX {
             return None;
         }
 
@@ -61,7 +62,7 @@ impl<T> SparseSet<T> {
     }
 
     pub fn get_mut(&mut self, id: usize) -> Option<&mut T> {
-        if id > self.id_to_index.len() || self.id_to_index[id] == usize::MAX {
+        if id >= self.id_to_index.len() || self.id_to_index[id] == usize::MAX {
             return None;
         }
 

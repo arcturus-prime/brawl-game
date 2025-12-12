@@ -5,7 +5,7 @@ use raylib::{
 };
 use shared::{
     math::{Quaternion, Transform, VECTOR_X, VECTOR_Y, Vector3},
-    physics::{Cuboid, Moment},
+    physics::{Cuboid, Moment, resolve_collisions},
     player::{InputState, PlayerData},
     tick::Ticker,
     utility::{EntityReserver, SparseSet},
@@ -126,13 +126,17 @@ fn main() {
     let local_player = entity.reserve();
     create_player(local_player, &mut world, &mut context);
 
-    let object = entity.reserve();
-    create_static_object(object, &mut world, &mut context);
+    let object1 = entity.reserve();
+    create_static_object(object1, &mut world, &mut context);
+
+    let object2 = entity.reserve();
+    create_static_object(object2, &mut world, &mut context);
 
     let camera = entity.reserve();
     create_orbit_camera(camera, local_player, &mut world);
 
-    world.transforms[object].position = Vector3::new(10.0, 0.0, 0.0);
+    world.transforms[object2].position = Vector3::new(-10.0, 0.0, 0.0);
+    world.transforms[object1].position = Vector3::new(10.0, 0.0, 0.0);
 
     while !context.handle.window_should_close() {
         let dt = context.handle.get_frame_time();
@@ -159,6 +163,8 @@ fn main() {
             for (id, moment) in world.momenta.iter_mut() {
                 moment.velocity *= LINEAR_DAMPENING
             }
+
+            resolve_collisions(&mut world.momenta, &mut world.transforms, &world.colliders);
         });
 
         world.cameras[camera].update_tranform(&mut world.transforms, camera);
