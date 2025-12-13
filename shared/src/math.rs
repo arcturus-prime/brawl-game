@@ -844,13 +844,13 @@ impl GeometryTree {
 
             if start_dist >= 0.0 && end_dist >= 0.0 {
                 if node.is_leaf() {
-                    return None;
+                    continue;
                 }
 
                 stack.push((node.positive_index, t_min, t_max));
             } else if start_dist < 0.0 && end_dist < 0.0 {
                 if node.is_leaf() {
-                    return None;
+                    continue;
                 }
 
                 stack.push((node.negative_index, t_min, t_max));
