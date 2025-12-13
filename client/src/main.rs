@@ -1,11 +1,13 @@
+use std::f32::consts::PI;
+
 use raylib::{
     color::Color,
     models::{Mesh, Model, RaylibMesh, RaylibModel},
     prelude::{RaylibDraw, RaylibDraw3D, RaylibMode3DExt},
 };
 use shared::{
-    math::{Quaternion, Transform, VECTOR_X, VECTOR_Y, Vector3},
-    physics::{Cuboid, Moment, resolve_collisions},
+    math::{GeometryTree, Quaternion, Transform, VECTOR_X, VECTOR_Y, Vector3},
+    physics::{Moment, step_world},
     player::{InputState, PlayerData},
     tick::Ticker,
     utility::{EntityReserver, SparseSet},
@@ -19,13 +21,11 @@ use crate::{
 mod math;
 mod render;
 
-const LINEAR_DAMPENING: f32 = 0.99;
-
 pub struct World {
     transforms: SparseSet<Transform>,
     models: SparseSet<Model>,
     players: SparseSet<PlayerData>,
-    colliders: SparseSet<Cuboid>,
+    colliders: SparseSet<GeometryTree>,
     momenta: SparseSet<Moment>,
     cameras: SparseSet<CameraData>,
 }
@@ -54,15 +54,17 @@ fn create_player(id: usize, world: &mut World, context: &mut RaylibContext) -> u
             .expect("Could not load model"),
     );
     world.players.insert(id, PlayerData::default());
-    world.momenta.insert(id, Moment::new(5.0));
-    world.colliders.insert(id, Cuboid::new(2.0, 2.0, 2.0));
+    world.momenta.insert(id, Moment::new(1.0));
+    world
+        .colliders
+        .insert(id, GeometryTree::from_cube(2.0, 2.0, 2.0));
     world.transforms.insert(id, Transform::identity());
 
     id
 }
 
 fn create_static_object(id: usize, world: &mut World, context: &mut RaylibContext) -> usize {
-    let mesh = Mesh::gen_mesh_cube(&context.thread, 2.0, 2.0, 6.0);
+    let mesh = Mesh::gen_mesh_cube(&context.thread, 5.0, 5.0, 6.0);
 
     world.models.insert(
         id,
@@ -72,7 +74,28 @@ fn create_static_object(id: usize, world: &mut World, context: &mut RaylibContex
             .expect("Could not load model"),
     );
     world.transforms.insert(id, Transform::identity());
-    world.colliders.insert(id, Cuboid::new(2.0, 2.0, 6.0));
+    world
+        .colliders
+        .insert(id, GeometryTree::from_cube(5.0, 5.0, 6.0));
+
+    id
+}
+
+fn create_dynamic_object(id: usize, world: &mut World, context: &mut RaylibContext) -> usize {
+    let mesh = Mesh::gen_mesh_cube(&context.thread, 5.0, 5.0, 5.0);
+
+    world.models.insert(
+        id,
+        context
+            .handle
+            .load_model_from_mesh(&context.thread, unsafe { mesh.make_weak() })
+            .expect("Could not load model"),
+    );
+    world.transforms.insert(id, Transform::identity());
+    world
+        .colliders
+        .insert(id, GeometryTree::from_cube(5.0, 5.0, 5.0));
+    world.momenta.insert(id, Moment::new(50.0));
 
     id
 }
@@ -108,6 +131,7 @@ fn get_current_input_state(context: &RaylibContext, camera_transform: &Transform
     }
 
     InputState {
+        look_direction: camera_transform.rotation.rotate_vector(VECTOR_X),
         want_direction: camera_transform
             .rotation
             .rotate_vector(direction.normalize()),
@@ -129,13 +153,9 @@ fn main() {
     let object1 = entity.reserve();
     create_static_object(object1, &mut world, &mut context);
 
-    let object2 = entity.reserve();
-    create_static_object(object2, &mut world, &mut context);
-
     let camera = entity.reserve();
     create_orbit_camera(camera, local_player, &mut world);
 
-    world.transforms[object2].position = Vector3::new(-10.0, 0.0, 0.0);
     world.transforms[object1].position = Vector3::new(10.0, 0.0, 0.0);
 
     while !context.handle.window_should_close() {
@@ -149,22 +169,23 @@ fn main() {
         });
 
         ticker.update(dt, |tick, dt| {
-            for (id, moment) in world.momenta.iter_mut() {
-                world.transforms[*id].position += moment.velocity * dt;
-            }
-
             let input = get_current_input_state(&context, &world.transforms[camera]);
 
             world.players[local_player].set_input(tick, input);
             world.players[local_player]
-                .apply_input(tick, &mut world.momenta[local_player])
+                .apply_input(
+                    tick,
+                    &mut world.momenta[local_player],
+                    &mut world.transforms[local_player],
+                )
                 .expect("Somehow the input of the current tick was not set");
 
-            for (id, moment) in world.momenta.iter_mut() {
-                moment.velocity *= LINEAR_DAMPENING
-            }
-
-            resolve_collisions(&mut world.momenta, &mut world.transforms, &world.colliders);
+            step_world(
+                &mut world.momenta,
+                &mut world.transforms,
+                &world.colliders,
+                dt,
+            );
         });
 
         world.cameras[camera].update_tranform(&mut world.transforms, camera);
@@ -182,7 +203,7 @@ fn main() {
 
             let position = vec_to_raylib(world.transforms[*id].position);
             let rotation_axis = vec_to_raylib(pair.0);
-            let rotation_angle = pair.1;
+            let rotation_angle = pair.1 / (2.0 * PI) * 360.0;
             let scale = vec_to_raylib(Vector3::new(1.0, 1.0, 1.0));
 
             draw_3d.draw_model_ex(

@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::{math::Vector3, physics::Moment};
+use crate::{
+    math::{Quaternion, Transform, VECTOR_Z, Vector3},
+    physics::Moment,
+};
 
 const PLAYER_ACCELERATION: f32 = 0.1;
 const PLAYER_MAX_SPEED: f32 = 100.0;
@@ -8,6 +11,7 @@ const PLAYER_MAX_SPEED: f32 = 100.0;
 #[derive(Default, Clone)]
 pub struct InputState {
     pub want_direction: Vector3,
+    pub look_direction: Vector3,
     pub throttle: f32,
 }
 
@@ -18,7 +22,12 @@ pub struct PlayerData {
 }
 
 impl PlayerData {
-    pub fn apply_input(&mut self, tick: u32, moment: &mut Moment) -> Result<(), ()> {
+    pub fn apply_input(
+        &mut self,
+        tick: u32,
+        moment: &mut Moment,
+        transform: &mut Transform,
+    ) -> Result<(), ()> {
         let inputs = self.input_history.get_mut(&tick).ok_or(())?;
 
         // note(arcprime): should always be normalized, but just in case
@@ -29,6 +38,7 @@ impl PlayerData {
             (inputs.throttle * PLAYER_MAX_SPEED - current_velocity).clamp(0.0, PLAYER_MAX_SPEED);
 
         moment.apply_impulse(inputs.want_direction * remaining * PLAYER_ACCELERATION);
+        transform.rotation = Quaternion::look_at(inputs.look_direction, VECTOR_Z);
 
         Ok(())
     }
