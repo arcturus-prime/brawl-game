@@ -1,6 +1,6 @@
 use raylib::{RaylibHandle, RaylibThread, camera::Camera};
 use shared::{
-    math::{Quaternion, Transform, VECTOR_X, VECTOR_Z, Vector3},
+    math::{Quaternion, Transform, Vector3},
     utility::{EntityReserver, SparseSet},
 };
 
@@ -77,7 +77,7 @@ impl CameraData {
                 let rotation = Quaternion::from_euler(0.0, azimuth, theta);
 
                 transforms[id].position =
-                    transforms[target].position - rotation.rotate_vector(VECTOR_X) * distance;
+                    transforms[target].position - rotation.rotate_vector(Vector3::X) * distance;
                 transforms[id].rotation = rotation
             }
             CameraMode::Fixed => {}
@@ -90,8 +90,8 @@ impl CameraData {
 
         Camera::perspective(
             vec_to_raylib(position),
-            vec_to_raylib(rotation.rotate_vector(VECTOR_X) + position),
-            vec_to_raylib(rotation.rotate_vector(VECTOR_Z)),
+            vec_to_raylib(rotation.rotate_vector(Vector3::X) + position),
+            vec_to_raylib(rotation.rotate_vector(Vector3::Z)),
             self.fov_y,
         )
     }

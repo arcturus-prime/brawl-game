@@ -1,12 +1,9 @@
 use std::{
-    collections::HashMap,
-    f32::{EPSILON, consts::PI},
+    f32::EPSILON,
     ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
-pub const VECTOR_X: Vector3 = Vector3::new(1.0, 0.0, 0.0);
-pub const VECTOR_Y: Vector3 = Vector3::new(0.0, 1.0, 0.0);
-pub const VECTOR_Z: Vector3 = Vector3::new(0.0, 0.0, 1.0);
+use crate::physics::COLLISION_RESTITUTION;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vector3 {
@@ -16,6 +13,10 @@ pub struct Vector3 {
 }
 
 impl Vector3 {
+    pub const X: Vector3 = Vector3::new(1.0, 0.0, 0.0);
+    pub const Y: Vector3 = Vector3::new(0.0, 1.0, 0.0);
+    pub const Z: Vector3 = Vector3::new(0.0, 0.0, 1.0);
+
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Vector3 { x, y, z }
     }
@@ -173,15 +174,14 @@ impl Quaternion {
         let quat = self.normalize();
 
         if quat.w.abs() >= 1.0 - EPSILON {
-            return (VECTOR_X, 0.0);
+            return (Vector3::X, 0.0);
         }
 
         let angle = 2.0 * quat.w.acos();
         let s = (1.0 - quat.w * quat.w).sqrt();
 
         let axis = if s < EPSILON {
-            // If s is too small, return arbitrary axis
-            VECTOR_X
+            Vector3::X
         } else {
             Vector3::new(quat.x / s, quat.y / s, quat.z / s)
         };
@@ -293,9 +293,9 @@ impl Quaternion {
 
         if right.length_squared() < EPSILON {
             let arbitrary = if forward.x.abs() < 0.9 {
-                VECTOR_X
+                Vector3::X
             } else {
-                VECTOR_Y
+                Vector3::Y
             };
 
             let right = arbitrary.cross(forward).normalize();
@@ -680,9 +680,6 @@ impl MulAssign for Transform {
     }
 }
 
-pub const SOLID_INDEX: u32 = u32::MAX;
-pub const EMPTY_INDEX: u32 = u32::MAX - 1;
-
 #[derive(Clone, Copy)]
 pub struct SpherecastData {
     pub position: Vector3,
@@ -690,68 +687,71 @@ pub struct SpherecastData {
     pub t: f32,
 }
 
+#[derive(Clone, Copy)]
+struct GeometryTreeNode {
+    plane: Plane,
+    negative_index: u32,
+    positive_index: u32,
+}
+
+impl GeometryTreeNode {
+    pub const NULL_INDEX: u32 = u32::MAX;
+
+    pub fn leaf(plane: Plane) -> Self {
+        Self {
+            plane,
+            negative_index: Self::NULL_INDEX,
+            positive_index: Self::NULL_INDEX,
+        }
+    }
+
+    pub fn branch(plane: Plane, negative_index: u32, positive_index: u32) -> Self {
+        Self {
+            plane,
+            negative_index,
+            positive_index,
+        }
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        self.negative_index == Self::NULL_INDEX && self.positive_index == Self::NULL_INDEX
+    }
+}
+
 pub struct GeometryTree {
-    planes: Vec<Plane>,
-
-    back_index: Vec<u32>,
-    front_index: Vec<u32>,
-
+    nodes: Vec<GeometryTreeNode>,
     bounds: BoundingBox,
 }
 
 impl GeometryTree {
-    pub fn from_cube(width: f32, height: f32, depth: f32) -> Self {
-        let planes = vec![
-            Plane::new(VECTOR_X, width * 0.5),
-            Plane::new(VECTOR_Y, height * 0.5),
-            Plane::new(VECTOR_Z, depth * 0.5),
-            Plane::new(-VECTOR_X, width * 0.5),
-            Plane::new(-VECTOR_Y, height * 0.5),
-            Plane::new(-VECTOR_Z, depth * 0.5),
+    pub const COLLISION_SKIN_OFFSET: f32 = 1e-2;
+
+    pub fn from_cube(half_x: f32, half_y: f32, half_z: f32) -> Self {
+        let planes = [
+            Plane::new(Vector3::X, half_x),
+            Plane::new(-Vector3::X, half_x),
+            Plane::new(Vector3::Y, half_y),
+            Plane::new(-Vector3::Y, half_y),
+            Plane::new(Vector3::Z, half_z),
+            Plane::new(-Vector3::Z, half_z),
         ];
 
-        let back_index = vec![1, 2, 3, 4, 5, SOLID_INDEX];
-        let front_index = vec![EMPTY_INDEX; 6];
-
-        let corner = Vector3::new(width, height, depth);
-        let bounds = BoundingBox::new(-corner / 2.0, corner / 2.0);
-
-        GeometryTree {
-            planes,
-            back_index,
-            front_index,
-            bounds,
-        }
-    }
-
-    pub fn from_wedge(width: f32, height: f32, depth: f32) -> Self {
-        let half_width = width * 0.5;
-        let half_depth = depth * 0.5;
-
-        let slant_normal = Vector3::new(0.0, depth, height).normalize();
-
-        let planes = vec![
-            Plane::new(-VECTOR_Y, 0.0),
-            Plane::new(-VECTOR_X, half_width),
-            Plane::new(VECTOR_X, half_width),
-            Plane::new(-VECTOR_Z, half_depth),
-            Plane::from_point_normal(Vector3::new(0.0, height, half_depth), slant_normal),
+        let nodes = vec![
+            GeometryTreeNode::branch(planes[0], 1, 2),
+            GeometryTreeNode::leaf(planes[1]),
+            GeometryTreeNode::branch(planes[2], 3, 4),
+            GeometryTreeNode::leaf(planes[3]),
+            GeometryTreeNode::branch(planes[4], 5, 6),
+            GeometryTreeNode::leaf(planes[5]),
+            GeometryTreeNode::leaf(planes[4]),
         ];
-
-        let back_index = vec![EMPTY_INDEX, 2, EMPTY_INDEX, 4, EMPTY_INDEX];
-        let front_index = vec![1, 3, EMPTY_INDEX, SOLID_INDEX, SOLID_INDEX];
 
         let bounds = BoundingBox::new(
-            Vector3::new(-half_width, 0.0, -half_depth),
-            Vector3::new(half_width, height, half_depth),
+            Vector3::new(-half_x, -half_y, -half_z),
+            Vector3::new(half_x, half_y, half_z),
         );
 
-        GeometryTree {
-            planes,
-            back_index,
-            front_index,
-            bounds,
-        }
+        GeometryTree { nodes, bounds }
     }
 
     pub fn get_bounds(&self) -> BoundingBox {
@@ -764,11 +764,11 @@ impl GeometryTree {
 
     /// Move the tree by an offset
     pub fn transform(&mut self, transform: Transform) {
-        for x in &mut self.planes {
-            let offset_distance = transform.position.dot(x.normal);
+        for x in &mut self.nodes {
+            let offset_distance = transform.position.dot(x.plane.normal);
 
-            x.distance += offset_distance;
-            x.normal = transform.rotation.rotate_vector(x.normal);
+            x.plane.distance += offset_distance;
+            x.plane.normal = transform.rotation.rotate_vector(x.plane.normal);
         }
 
         self.bounds.min += transform.position;
@@ -780,21 +780,20 @@ impl GeometryTree {
 
     /// Perform a CSG union with another Tree
     pub fn union(&mut self, tree: &GeometryTree) {
-        let root = self.planes.len() as u32;
+        let root = self.nodes.len() as u32;
 
-        for i in 0..tree.planes.len() {
-            self.planes.push(tree.planes[i]);
-            self.back_index.push(tree.back_index[i] + root);
-            self.front_index.push(tree.front_index[i] + root);
+        for i in 0..tree.nodes.len() {
+            let mut node = tree.nodes[i];
+
+            node.negative_index += root;
+            node.positive_index += root;
+
+            self.nodes.push(node);
         }
 
-        for i in 0..root as usize {
-            if self.back_index[i] == EMPTY_INDEX {
-                self.back_index[i] = root;
-            }
-
-            if self.front_index[i] == EMPTY_INDEX {
-                self.front_index[i] = root;
+        for x in &mut self.nodes {
+            if x.is_leaf() {
+                x.positive_index = root;
             }
         }
 
@@ -803,21 +802,20 @@ impl GeometryTree {
 
     /// Perform a CSG intersection with another Tree
     pub fn intersection(&mut self, tree: &GeometryTree) {
-        let root = self.planes.len() as u32;
+        let root = self.nodes.len() as u32;
 
-        for i in 0..tree.planes.len() {
-            self.planes.push(tree.planes[i]);
-            self.back_index.push(tree.back_index[i] + root);
-            self.front_index.push(tree.front_index[i] + root);
+        for i in 0..tree.nodes.len() {
+            let mut node = tree.nodes[i];
+
+            node.negative_index += root;
+            node.positive_index += root;
+
+            self.nodes.push(node);
         }
 
-        for i in 0..root as usize {
-            if self.back_index[i] == SOLID_INDEX {
-                self.back_index[i] = root;
-            }
-
-            if self.front_index[i] == SOLID_INDEX {
-                self.front_index[i] = root;
+        for x in &mut self.nodes {
+            if x.is_leaf() {
+                x.negative_index = root;
             }
         }
 
@@ -826,7 +824,7 @@ impl GeometryTree {
 
     /// Please note that this is an overestimation of the hull except in the case where radius is 0
     pub fn spherecast(&self, radius: f32, origin: Vector3, dir: Vector3) -> Option<SpherecastData> {
-        if self.planes.is_empty() {
+        if self.nodes.is_empty() {
             return None;
         }
 
@@ -834,69 +832,45 @@ impl GeometryTree {
         let dir = dir.normalize();
 
         let mut stack = Vec::with_capacity(32);
-        stack.push((0u32, 0.0, length, self.planes[0].normal));
+        stack.push((0u32, 0.0, length));
 
-        while let Some((index, t_min, t_max, normal)) = stack.pop() {
-            if index == SOLID_INDEX {
-                return Some(SpherecastData {
-                    position: origin + dir * t_min,
-                    normal,
-                    t: t_min,
-                });
-            }
+        while let Some((index, t_min, t_max)) = stack.pop() {
+            let mut node = self.nodes[index as usize];
 
-            if index == EMPTY_INDEX {
-                continue;
-            }
+            node.plane.distance += radius;
 
-            let mut plane = self.planes[index as usize];
-
-            if self.back_index[index as usize] == EMPTY_INDEX
-                && self.front_index[index as usize] != EMPTY_INDEX
-            {
-                plane.distance -= radius;
-            } else if self.front_index[index as usize] == EMPTY_INDEX
-                && self.back_index[index as usize] != EMPTY_INDEX
-            {
-                plane.distance += radius;
-            }
-
-            let start_dist = plane.distance_to_point(origin + dir * t_min);
-            let end_dist = plane.distance_to_point(origin + dir * t_max);
+            let start_dist = node.plane.distance_to_point(origin + dir * t_min);
+            let end_dist = node.plane.distance_to_point(origin + dir * t_max);
 
             if start_dist >= 0.0 && end_dist >= 0.0 {
-                stack.push((self.front_index[index as usize], t_min, t_max, normal));
+                if node.is_leaf() {
+                    return None;
+                }
+
+                stack.push((node.positive_index, t_min, t_max));
             } else if start_dist < 0.0 && end_dist < 0.0 {
-                stack.push((self.back_index[index as usize], t_min, t_max, normal));
-            } else if let Some(result) = plane.raycast(origin, dir) {
+                if node.is_leaf() {
+                    return None;
+                }
+
+                stack.push((node.negative_index, t_min, t_max));
+            } else if let Some(result) = node.plane.raycast(origin, dir) {
                 let t_split = result.1.clamp(t_min, t_max);
 
+                if node.is_leaf() {
+                    return Some(SpherecastData {
+                        position: origin + dir * t_split,
+                        normal: node.plane.normal,
+                        t: t_split,
+                    });
+                }
+
                 if start_dist >= 0.0 {
-                    stack.push((
-                        self.back_index[index as usize],
-                        t_split,
-                        t_max,
-                        -plane.normal,
-                    ));
-                    stack.push((
-                        self.front_index[index as usize],
-                        t_min,
-                        t_split,
-                        plane.normal,
-                    ));
+                    stack.push((node.negative_index, t_split, t_max));
+                    stack.push((node.positive_index, t_min, t_split));
                 } else {
-                    stack.push((
-                        self.front_index[index as usize],
-                        t_split,
-                        t_max,
-                        plane.normal,
-                    ));
-                    stack.push((
-                        self.back_index[index as usize],
-                        t_min,
-                        t_split,
-                        -plane.normal,
-                    ));
+                    stack.push((node.positive_index, t_split, t_max));
+                    stack.push((node.negative_index, t_min, t_split));
                 }
             }
         }
@@ -906,27 +880,19 @@ impl GeometryTree {
 
     /// Perform a point containment test against the BSP
     pub fn contains<'a>(&'a mut self, point: Vector3) -> bool {
-        if self.planes.is_empty() {
+        if self.nodes.is_empty() {
             return false;
         }
 
         let mut index = 0;
 
         loop {
-            if index == SOLID_INDEX {
-                return true;
-            }
+            let node = &self.nodes[index as usize];
 
-            if index == EMPTY_INDEX {
-                return false;
-            }
-
-            let plane = &self.planes[index as usize];
-
-            index = if plane.distance_to_point(point) >= 0.0 {
-                self.front_index[index as usize]
+            index = if node.plane.distance_to_point(point) >= 0.0 {
+                node.positive_index
             } else {
-                self.back_index[index as usize]
+                node.negative_index
             };
         }
     }

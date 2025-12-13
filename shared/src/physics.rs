@@ -28,72 +28,86 @@ impl Moment {
     }
 }
 
-pub fn step_world(
-    momenta: &mut SparseSet<Moment>,
-    transforms: &mut SparseSet<Transform>,
+pub fn get_collisions(
+    momenta: &SparseSet<Moment>,
+    transforms: &SparseSet<Transform>,
     colliders: &SparseSet<GeometryTree>,
     dt: f32,
-) {
-    let mut collisions = vec![];
-    for (id_a, body_a) in colliders.iter() {
-        let mut earliest_collision: Option<(SpherecastData, usize, usize)> = None;
+) -> (Vec<(SpherecastData, usize, usize)>, Vec<usize>) {
+    let mut colliding = vec![];
+    let mut non_colliding = vec![];
+
+    for (id_a, moment_a) in momenta.iter() {
+        let Some(collider) = colliders.get(*id_a) else {
+            non_colliding.push(*id_a);
+
+            continue;
+        };
+
+        let mut earliest_collision: Option<(SpherecastData, usize)> = None;
 
         for (id_b, body_b) in colliders.iter() {
             if id_a == id_b {
                 continue;
             }
 
-            let relative_velocity = if let Some(moment_b) = momenta.get(*id_b)
-                && let Some(moment_a) = momenta.get(*id_a)
-            {
+            let velocity = if let Some(moment_b) = momenta.get(*id_b) {
                 moment_a.velocity - moment_b.velocity
-            } else if let Some(moment_a) = momenta.get(*id_a) {
-                moment_a.velocity
             } else {
+                moment_a.velocity
+            };
+
+            let position = transforms[*id_a].position - transforms[*id_b].position;
+
+            let Some(collision) =
+                body_b.spherecast(collider.get_bounds_radius(), position, velocity * dt)
+            else {
                 continue;
             };
 
-            let relative_position = transforms[*id_a].position - transforms[*id_b].position;
-
-            let Some(collision) = body_b.spherecast(
-                body_a.get_bounds_radius(),
-                relative_position,
-                relative_velocity * dt,
-            ) else {
-                continue;
-            };
-
-            if let Some((earliest, id_a, id_b)) = earliest_collision
+            if let Some((earliest, _)) = earliest_collision
                 && earliest.t > collision.t
             {
-                earliest_collision = Some((collision, id_a, id_b))
+                earliest_collision = Some((collision, *id_b))
             } else if earliest_collision.is_none() {
-                earliest_collision = Some((collision, *id_a, *id_b))
+                earliest_collision = Some((collision, *id_b))
             }
         }
 
-        if let Some(collision) = earliest_collision {
-            collisions.push(collision);
+        if let Some((collision, id_b)) = earliest_collision {
+            colliding.push((collision, *id_a, id_b));
+        } else {
+            non_colliding.push(*id_a);
         }
     }
 
-    for (collision, id_a, id_b) in collisions {
-        let mut mass = 1.0 / momenta[id_a].mass;
-        let mut velocity = momenta[id_a].velocity;
+    (colliding, non_colliding)
+}
 
-        if let Some(moment) = momenta.get(id_b) {
-            mass += 1.0 / moment.mass;
-            velocity -= moment.velocity;
-        }
+pub fn step_world(
+    colliding: Vec<(SpherecastData, usize, usize)>,
+    non_colliding: Vec<usize>,
+    momenta: &mut SparseSet<Moment>,
+    transforms: &mut SparseSet<Transform>,
+    dt: f32,
+) {
+    for (collision, id_a, id_b) in colliding {
+        let velocity = momenta[id_a].velocity;
+        let mass = momenta[id_a].mass;
 
         let velocity_along = collision.normal.dot(velocity);
         let impulse = collision.normal * -(1.0 + COLLISION_RESTITUTION) * velocity_along / mass;
 
+        transforms[id_a].position = collision.position + transforms[id_b].position;
+
         momenta[id_a].apply_impulse(impulse);
+
+        transforms[id_a].position += momenta[id_a].velocity * dt;
+        momenta[id_a].velocity *= LINEAR_DAMPENING;
     }
 
-    for x in momenta.iter_mut() {
-        transforms[*x.0].position += x.1.velocity * dt;
-        x.1.velocity *= LINEAR_DAMPENING;
+    for id_a in non_colliding {
+        transforms[id_a].position += momenta[id_a].velocity * dt;
+        momenta[id_a].velocity *= LINEAR_DAMPENING;
     }
 }

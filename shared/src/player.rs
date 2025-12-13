@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    math::{Quaternion, Transform, VECTOR_Z, Vector3},
+    math::{Quaternion, Transform, Vector3},
     physics::Moment,
 };
 
@@ -38,7 +38,7 @@ impl PlayerData {
             (inputs.throttle * PLAYER_MAX_SPEED - current_velocity).clamp(0.0, PLAYER_MAX_SPEED);
 
         moment.apply_impulse(inputs.want_direction * remaining * PLAYER_ACCELERATION);
-        transform.rotation = Quaternion::look_at(inputs.look_direction, VECTOR_Z);
+        transform.rotation = Quaternion::look_at(inputs.look_direction, Vector3::Z);
 
         Ok(())
     }
