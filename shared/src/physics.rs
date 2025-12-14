@@ -4,7 +4,7 @@ use crate::{
 };
 
 pub const COLLISION_RESTITUTION: f32 = 0.5;
-pub const LINEAR_DAMPENING: f32 = 0.95;
+pub const LINEAR_DAMPENING: f32 = 0.75;
 
 pub struct Moment {
     pub velocity: Vector3,
@@ -33,7 +33,7 @@ pub fn get_collisions(
     transforms: &SparseSet<Transform>,
     colliders: &SparseSet<GeometryTree>,
     dt: f32,
-) -> (Vec<(SpherecastData, usize, usize)>, Vec<usize>) {
+) -> (Vec<(SpherecastData, usize)>, Vec<usize>) {
     let mut colliding = vec![];
     let mut non_colliding = vec![];
 
@@ -75,7 +75,7 @@ pub fn get_collisions(
         }
 
         if let Some((collision, id_b)) = earliest_collision {
-            colliding.push((collision, *id_a, id_b));
+            colliding.push((collision, *id_a));
         } else {
             non_colliding.push(*id_a);
         }
@@ -85,20 +85,24 @@ pub fn get_collisions(
 }
 
 pub fn step_world(
-    colliding: Vec<(SpherecastData, usize, usize)>,
+    colliding: Vec<(SpherecastData, usize)>,
     non_colliding: Vec<usize>,
     momenta: &mut SparseSet<Moment>,
     transforms: &mut SparseSet<Transform>,
     dt: f32,
 ) {
-    for (collision, id_a, id_b) in colliding {
+    if colliding.len() != 0 {
+        println!("Collision");
+    } else {
+        println!("No collision");
+    }
+
+    for (collision, id_a) in colliding {
         let velocity = momenta[id_a].velocity;
         let mass = momenta[id_a].mass;
 
         let velocity_along = collision.normal.dot(velocity);
         let impulse = collision.normal * -(1.0 + COLLISION_RESTITUTION) * velocity_along / mass;
-
-        transforms[id_a].position = collision.position + transforms[id_b].position;
 
         momenta[id_a].apply_impulse(impulse);
 

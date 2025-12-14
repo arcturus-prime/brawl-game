@@ -697,15 +697,7 @@ struct GeometryTreeNode {
 impl GeometryTreeNode {
     pub const NULL_INDEX: u32 = u32::MAX;
 
-    pub fn leaf(plane: Plane) -> Self {
-        Self {
-            plane,
-            negative_index: Self::NULL_INDEX,
-            positive_index: Self::NULL_INDEX,
-        }
-    }
-
-    pub fn branch(plane: Plane, negative_index: u32, positive_index: u32) -> Self {
+    pub fn new(plane: Plane, negative_index: u32, positive_index: u32) -> Self {
         Self {
             plane,
             negative_index,
@@ -713,8 +705,40 @@ impl GeometryTreeNode {
         }
     }
 
-    pub fn is_leaf(&self) -> bool {
-        self.negative_index == Self::NULL_INDEX && self.positive_index == Self::NULL_INDEX
+    pub fn positive_terminal(plane: Plane, negative_index: u32) -> Self {
+        Self {
+            plane,
+            negative_index,
+            positive_index: Self::NULL_INDEX,
+        }
+    }
+
+    pub fn negative_terminal(plane: Plane, positive_index: u32) -> Self {
+        Self {
+            plane,
+            negative_index: Self::NULL_INDEX,
+            positive_index,
+        }
+    }
+
+    pub fn terminal(plane: Plane) -> Self {
+        Self {
+            plane,
+            negative_index: Self::NULL_INDEX,
+            positive_index: Self::NULL_INDEX,
+        }
+    }
+
+    pub fn is_positive_terminal(&self) -> bool {
+        self.positive_index == Self::NULL_INDEX
+    }
+
+    pub fn is_negative_terminal(&self) -> bool {
+        self.negative_index == Self::NULL_INDEX
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.is_negative_terminal() && self.is_positive_terminal()
     }
 }
 
@@ -727,23 +751,13 @@ impl GeometryTree {
     pub const COLLISION_SKIN_OFFSET: f32 = 1e-2;
 
     pub fn from_cube(half_x: f32, half_y: f32, half_z: f32) -> Self {
-        let planes = [
-            Plane::new(Vector3::X, half_x),
-            Plane::new(-Vector3::X, half_x),
-            Plane::new(Vector3::Y, half_y),
-            Plane::new(-Vector3::Y, half_y),
-            Plane::new(Vector3::Z, half_z),
-            Plane::new(-Vector3::Z, half_z),
-        ];
-
         let nodes = vec![
-            GeometryTreeNode::branch(planes[0], 1, 2),
-            GeometryTreeNode::leaf(planes[1]),
-            GeometryTreeNode::branch(planes[2], 3, 4),
-            GeometryTreeNode::leaf(planes[3]),
-            GeometryTreeNode::branch(planes[4], 5, 6),
-            GeometryTreeNode::leaf(planes[5]),
-            GeometryTreeNode::leaf(planes[4]),
+            GeometryTreeNode::positive_terminal(Plane::new(Vector3::X, half_x), 1),
+            GeometryTreeNode::positive_terminal(Plane::new(-Vector3::X, half_x), 2),
+            GeometryTreeNode::positive_terminal(Plane::new(Vector3::Y, half_y), 3),
+            GeometryTreeNode::positive_terminal(Plane::new(-Vector3::Y, half_y), 4),
+            GeometryTreeNode::positive_terminal(Plane::new(Vector3::Z, half_z), 5),
+            GeometryTreeNode::terminal(Plane::new(-Vector3::Z, half_z)),
         ];
 
         let bounds = BoundingBox::new(
@@ -782,17 +796,23 @@ impl GeometryTree {
     pub fn union(&mut self, tree: &GeometryTree) {
         let root = self.nodes.len() as u32;
 
-        for i in 0..tree.nodes.len() {
-            let mut node = tree.nodes[i];
+        for node in &tree.nodes {
+            let mut node = *node;
 
-            node.negative_index += root;
-            node.positive_index += root;
+            if node.is_negative_terminal() {
+                node.positive_index += root
+            } else if node.is_positive_terminal() {
+                node.negative_index += root
+            } else if !node.is_terminal() {
+                node.negative_index += root;
+                node.positive_index += root;
+            }
 
             self.nodes.push(node);
         }
 
         for x in &mut self.nodes {
-            if x.is_leaf() {
+            if x.is_positive_terminal() {
                 x.positive_index = root;
             }
         }
@@ -804,17 +824,23 @@ impl GeometryTree {
     pub fn intersection(&mut self, tree: &GeometryTree) {
         let root = self.nodes.len() as u32;
 
-        for i in 0..tree.nodes.len() {
-            let mut node = tree.nodes[i];
+        for node in &tree.nodes {
+            let mut node = *node;
 
-            node.negative_index += root;
-            node.positive_index += root;
+            if node.is_negative_terminal() {
+                node.positive_index += root
+            } else if node.is_positive_terminal() {
+                node.negative_index += root
+            } else if !node.is_terminal() {
+                node.negative_index += root;
+                node.positive_index += root;
+            }
 
             self.nodes.push(node);
         }
 
         for x in &mut self.nodes {
-            if x.is_leaf() {
+            if x.is_negative_terminal() {
                 x.negative_index = root;
             }
         }
@@ -832,46 +858,72 @@ impl GeometryTree {
         let dir = dir.normalize();
 
         let mut stack = Vec::with_capacity(32);
-        stack.push((0u32, 0.0, length));
+        stack.push((0u32, 0.0, length, self.nodes[0].plane.normal));
 
-        while let Some((index, t_min, t_max)) = stack.pop() {
+        while let Some((index, t_min, t_max, normal)) = stack.pop() {
             let mut node = self.nodes[index as usize];
 
-            node.plane.distance += radius;
+            if node.is_negative_terminal() {
+                node.plane.distance += radius;
+            }
 
             let start_dist = node.plane.distance_to_point(origin + dir * t_min);
             let end_dist = node.plane.distance_to_point(origin + dir * t_max);
 
-            if start_dist >= 0.0 && end_dist >= 0.0 {
-                if node.is_leaf() {
-                    continue;
-                }
+            let both_positive = start_dist > 0.0 && end_dist > 0.0;
+            let both_negative = start_dist <= 0.0 && end_dist <= 0.0;
 
-                stack.push((node.positive_index, t_min, t_max));
-            } else if start_dist < 0.0 && end_dist < 0.0 {
-                if node.is_leaf() {
-                    continue;
-                }
+            if both_positive && node.is_positive_terminal() {
+                continue;
+            } else if both_positive {
+                stack.push((node.positive_index, t_min, t_max, normal));
+                continue;
+            }
 
-                stack.push((node.negative_index, t_min, t_max));
-            } else if let Some(result) = node.plane.raycast(origin, dir) {
-                let t_split = result.1.clamp(t_min, t_max);
+            if both_negative && node.is_negative_terminal() {
+                return Some(SpherecastData {
+                    position: origin + dir * t_min + Self::COLLISION_SKIN_OFFSET * normal,
+                    normal: normal,
+                    t: t_min,
+                });
+            } else if both_negative {
+                stack.push((node.negative_index, t_min, t_max, normal));
+                continue;
+            }
 
-                if node.is_leaf() {
-                    return Some(SpherecastData {
-                        position: origin + dir * t_split,
-                        normal: node.plane.normal,
-                        t: t_split,
-                    });
-                }
+            let start_only_positive = start_dist <= 0.0 && end_dist > 0.0;
+            let end_only_postitive = start_dist > 0.0 && end_dist <= 0.0;
 
-                if start_dist >= 0.0 {
-                    stack.push((node.negative_index, t_split, t_max));
-                    stack.push((node.positive_index, t_min, t_split));
-                } else {
-                    stack.push((node.positive_index, t_split, t_max));
-                    stack.push((node.negative_index, t_min, t_split));
-                }
+            let Some(raycast) = node.plane.raycast(origin, dir) else {
+                // should only happen if some floating-point screwup occurs
+                println!("Uh, floating point issue in spherecast");
+                continue;
+            };
+
+            if node.is_negative_terminal() {
+                return Some(SpherecastData {
+                    position: raycast.0 + Self::COLLISION_SKIN_OFFSET * normal,
+                    normal: normal,
+                    t: raycast.1,
+                });
+            }
+
+            if node.is_positive_terminal() && start_only_positive {
+                stack.push((node.negative_index, raycast.1, t_max, node.plane.normal));
+                continue;
+            }
+
+            if node.is_positive_terminal() && end_only_postitive {
+                stack.push((node.negative_index, t_min, raycast.1, node.plane.normal));
+                continue;
+            }
+
+            if start_dist >= 0.0 {
+                stack.push((node.negative_index, raycast.1, t_max, node.plane.normal));
+                stack.push((node.positive_index, t_min, raycast.1, normal));
+            } else {
+                stack.push((node.positive_index, raycast.1, t_max, node.plane.normal));
+                stack.push((node.negative_index, t_min, raycast.1, node.plane.normal));
             }
         }
 
