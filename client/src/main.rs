@@ -78,7 +78,7 @@ fn create_static_object(id: usize, world: &mut World, context: &mut RaylibContex
     let mut collider = GeometryTree::from_cube(50.0, 50.0, 5.0);
 
     collider.union(
-        GeometryTree::from_cube(10.0, 10.0, 50.0)
+        GeometryTree::from_cube(40.0, 40.0, 50.0)
             .transform(Transform::from_position(Vector3::Z * 27.50)),
     );
 
