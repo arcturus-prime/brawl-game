@@ -680,7 +680,7 @@ impl MulAssign for Transform {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct SpherecastData {
     pub position: Vector3,
     pub normal: Vector3,
@@ -688,76 +688,117 @@ pub struct SpherecastData {
 }
 
 #[derive(Clone, Copy)]
-struct GeometryTreeNode {
+struct HalfspaceContents(u32);
+
+impl HalfspaceContents {
+    const SOLID: u32 = u32::MAX;
+    const EMPTY: u32 = u32::MAX - 1;
+
+    pub fn solid() -> Self {
+        Self(Self::SOLID)
+    }
+
+    pub fn empty() -> Self {
+        Self(Self::EMPTY)
+    }
+
+    pub fn index(index: u32) -> Self {
+        Self(index)
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == Self::EMPTY
+    }
+
+    pub fn is_solid(self) -> bool {
+        self.0 == Self::SOLID
+    }
+
+    pub fn is_index(self) -> bool {
+        !self.is_empty() && !self.is_solid()
+    }
+
+    pub fn get_index(self) -> Option<u32> {
+        if self.is_empty() || self.is_solid() {
+            return None;
+        }
+
+        Some(self.0)
+    }
+}
+
+#[derive(Clone)]
+struct Halfspace {
     plane: Plane,
-    negative_index: u32,
-    positive_index: u32,
+    negative: HalfspaceContents,
+    positive: HalfspaceContents,
 }
 
-impl GeometryTreeNode {
-    pub const NULL_INDEX: u32 = u32::MAX;
-
-    pub fn new(plane: Plane, negative_index: u32, positive_index: u32) -> Self {
+impl Halfspace {
+    pub fn new(plane: Plane, positive: HalfspaceContents, negative: HalfspaceContents) -> Self {
         Self {
             plane,
-            negative_index,
-            positive_index,
+            positive,
+            negative,
         }
     }
 
-    pub fn positive_terminal(plane: Plane, negative_index: u32) -> Self {
-        Self {
-            plane,
-            negative_index,
-            positive_index: Self::NULL_INDEX,
+    pub fn normal(&self) -> Vector3 {
+        if self.positive.is_empty() || self.negative.is_solid() {
+            self.plane.normal
+        } else if self.negative.is_empty() || self.positive.is_solid() {
+            -self.plane.normal
+        } else {
+            Vector3::zero()
         }
-    }
-
-    pub fn negative_terminal(plane: Plane, positive_index: u32) -> Self {
-        Self {
-            plane,
-            negative_index: Self::NULL_INDEX,
-            positive_index,
-        }
-    }
-
-    pub fn terminal(plane: Plane) -> Self {
-        Self {
-            plane,
-            negative_index: Self::NULL_INDEX,
-            positive_index: Self::NULL_INDEX,
-        }
-    }
-
-    pub fn is_positive_terminal(&self) -> bool {
-        self.positive_index == Self::NULL_INDEX
-    }
-
-    pub fn is_negative_terminal(&self) -> bool {
-        self.negative_index == Self::NULL_INDEX
-    }
-
-    pub fn is_terminal(&self) -> bool {
-        self.is_negative_terminal() && self.is_positive_terminal()
     }
 }
 
+#[derive(Clone)]
 pub struct GeometryTree {
-    nodes: Vec<GeometryTreeNode>,
+    nodes: Vec<Halfspace>,
     bounds: BoundingBox,
 }
 
 impl GeometryTree {
     pub const COLLISION_SKIN_OFFSET: f32 = 1e-2;
 
-    pub fn from_cube(half_x: f32, half_y: f32, half_z: f32) -> Self {
+    pub fn from_cube(size_x: f32, size_y: f32, size_z: f32) -> Self {
+        let half_x = size_x / 2.0;
+        let half_y = size_y / 2.0;
+        let half_z = size_z / 2.0;
+
         let nodes = vec![
-            GeometryTreeNode::positive_terminal(Plane::new(Vector3::X, half_x), 1),
-            GeometryTreeNode::positive_terminal(Plane::new(-Vector3::X, half_x), 2),
-            GeometryTreeNode::positive_terminal(Plane::new(Vector3::Y, half_y), 3),
-            GeometryTreeNode::positive_terminal(Plane::new(-Vector3::Y, half_y), 4),
-            GeometryTreeNode::positive_terminal(Plane::new(Vector3::Z, half_z), 5),
-            GeometryTreeNode::terminal(Plane::new(-Vector3::Z, half_z)),
+            Halfspace::new(
+                Plane::new(Vector3::X, half_x),
+                HalfspaceContents::empty(),
+                HalfspaceContents::index(1),
+            ),
+            Halfspace::new(
+                Plane::new(-Vector3::X, half_x),
+                HalfspaceContents::empty(),
+                HalfspaceContents::index(2),
+            ),
+            Halfspace::new(
+                Plane::new(Vector3::Y, half_y),
+                HalfspaceContents::empty(),
+                HalfspaceContents::index(3),
+            ),
+            Halfspace::new(
+                Plane::new(-Vector3::Y, half_y),
+                HalfspaceContents::empty(),
+                HalfspaceContents::index(4),
+            ),
+            Halfspace::new(
+                Plane::new(Vector3::Z, half_z),
+                HalfspaceContents::empty(),
+                HalfspaceContents::index(5),
+            ),
+            Halfspace::new(
+                Plane::new(-Vector3::Z, half_z),
+                HalfspaceContents::empty(),
+                HalfspaceContents::solid(),
+            ),
         ];
 
         let bounds = BoundingBox::new(
@@ -797,23 +838,26 @@ impl GeometryTree {
         let root = self.nodes.len() as u32;
 
         for node in &tree.nodes {
-            let mut node = *node;
+            let mut node = node.clone();
 
-            if node.is_negative_terminal() {
-                node.positive_index += root
-            } else if node.is_positive_terminal() {
-                node.negative_index += root
-            } else if !node.is_terminal() {
-                node.negative_index += root;
-                node.positive_index += root;
+            if node.negative.is_index() {
+                node.negative.0 += root;
+            }
+
+            if node.positive.is_index() {
+                node.positive.0 += root;
             }
 
             self.nodes.push(node);
         }
 
         for x in &mut self.nodes {
-            if x.is_positive_terminal() {
-                x.positive_index = root;
+            if x.positive.is_empty() {
+                x.positive = HalfspaceContents::index(root);
+            }
+
+            if x.negative.is_empty() {
+                x.negative = HalfspaceContents::index(root);
             }
         }
 
@@ -825,26 +869,28 @@ impl GeometryTree {
         let root = self.nodes.len() as u32;
 
         for node in &tree.nodes {
-            let mut node = *node;
+            let mut node = node.clone();
 
-            if node.is_negative_terminal() {
-                node.positive_index += root
-            } else if node.is_positive_terminal() {
-                node.negative_index += root
-            } else if !node.is_terminal() {
-                node.negative_index += root;
-                node.positive_index += root;
+            if node.negative.is_index() {
+                node.negative.0 += root;
+            }
+
+            if node.positive.is_index() {
+                node.positive.0 += root;
             }
 
             self.nodes.push(node);
         }
 
         for x in &mut self.nodes {
-            if x.is_negative_terminal() {
-                x.negative_index = root;
+            if x.positive.is_solid() {
+                x.positive = HalfspaceContents::index(root);
+            }
+
+            if x.negative.is_solid() {
+                x.negative = HalfspaceContents::index(root);
             }
         }
-
         self.bounds = self.bounds.intersection(tree.bounds);
     }
 
@@ -858,72 +904,45 @@ impl GeometryTree {
         let dir = dir.normalize();
 
         let mut stack = Vec::with_capacity(32);
-        stack.push((0u32, 0.0, length, self.nodes[0].plane.normal));
+        stack.push((
+            HalfspaceContents::index(0),
+            0.0,
+            length,
+            self.nodes[0].normal(),
+        ));
 
-        while let Some((index, t_min, t_max, normal)) = stack.pop() {
-            let mut node = self.nodes[index as usize];
-
-            if node.is_negative_terminal() {
-                node.plane.distance += radius;
+        while let Some((contents, t_min, t_max, normal)) = stack.pop() {
+            if contents.is_solid() {
+                return Some(SpherecastData {
+                    position: origin + dir * t_min + Self::COLLISION_SKIN_OFFSET * normal,
+                    normal,
+                    t: t_min,
+                });
             }
+
+            if contents.is_empty() {
+                continue;
+            }
+
+            let mut node = self.nodes[contents.get_index().unwrap() as usize].clone();
+
+            node.plane.distance += node.plane.normal.dot(node.normal()).signum() * radius;
 
             let start_dist = node.plane.distance_to_point(origin + dir * t_min);
             let end_dist = node.plane.distance_to_point(origin + dir * t_max);
 
-            let both_positive = start_dist > 0.0 && end_dist > 0.0;
-            let both_negative = start_dist <= 0.0 && end_dist <= 0.0;
-
-            if both_positive && node.is_positive_terminal() {
-                continue;
-            } else if both_positive {
-                stack.push((node.positive_index, t_min, t_max, normal));
-                continue;
-            }
-
-            if both_negative && node.is_negative_terminal() {
-                return Some(SpherecastData {
-                    position: origin + dir * t_min + Self::COLLISION_SKIN_OFFSET * normal,
-                    normal: normal,
-                    t: t_min,
-                });
-            } else if both_negative {
-                stack.push((node.negative_index, t_min, t_max, normal));
-                continue;
-            }
-
-            let start_only_positive = start_dist <= 0.0 && end_dist > 0.0;
-            let end_only_postitive = start_dist > 0.0 && end_dist <= 0.0;
-
-            let Some(raycast) = node.plane.raycast(origin, dir) else {
-                // should only happen if some floating-point screwup occurs
-                println!("Uh, floating point issue in spherecast");
-                continue;
-            };
-
-            if node.is_negative_terminal() {
-                return Some(SpherecastData {
-                    position: raycast.0 + Self::COLLISION_SKIN_OFFSET * normal,
-                    normal: normal,
-                    t: raycast.1,
-                });
-            }
-
-            if node.is_positive_terminal() && start_only_positive {
-                stack.push((node.negative_index, raycast.1, t_max, node.plane.normal));
-                continue;
-            }
-
-            if node.is_positive_terminal() && end_only_postitive {
-                stack.push((node.negative_index, t_min, raycast.1, node.plane.normal));
-                continue;
-            }
-
-            if start_dist >= 0.0 {
-                stack.push((node.negative_index, raycast.1, t_max, node.plane.normal));
-                stack.push((node.positive_index, t_min, raycast.1, normal));
-            } else {
-                stack.push((node.positive_index, raycast.1, t_max, node.plane.normal));
-                stack.push((node.negative_index, t_min, raycast.1, node.plane.normal));
+            if start_dist >= 0.0 && end_dist >= 0.0 {
+                stack.push((node.positive, t_min, t_max, normal));
+            } else if start_dist < 0.0 && end_dist < 0.0 {
+                stack.push((node.negative, t_min, t_max, normal));
+            } else if let Some(result) = node.plane.raycast(origin, dir) {
+                if start_dist >= 0.0 {
+                    stack.push((node.negative, result.1, t_max, node.normal()));
+                    stack.push((node.positive, t_min, result.1, normal));
+                } else {
+                    stack.push((node.positive, result.1, t_max, normal));
+                    stack.push((node.negative, t_min, result.1, node.normal()));
+                }
             }
         }
 
@@ -936,15 +955,15 @@ impl GeometryTree {
             return false;
         }
 
-        let mut index = 0;
+        let mut contents = HalfspaceContents::index(0);
 
         loop {
-            let node = &self.nodes[index as usize];
+            let node = &self.nodes[contents.get_index().unwrap() as usize];
 
-            index = if node.plane.distance_to_point(point) >= 0.0 {
-                node.positive_index
+            contents = if node.plane.distance_to_point(point) >= 0.0 {
+                node.positive
             } else {
-                node.negative_index
+                node.negative
             };
         }
     }

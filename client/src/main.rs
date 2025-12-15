@@ -7,7 +7,7 @@ use raylib::{
 };
 use shared::{
     math::{GeometryTree, Quaternion, Transform, Vector3},
-    physics::{Moment, get_collisions, step_world},
+    physics::{Moment, step_world},
     player::{InputState, PlayerData},
     tick::Ticker,
     utility::{EntityReserver, SparseSet},
@@ -64,7 +64,7 @@ fn create_player(id: usize, world: &mut World, context: &mut RaylibContext) -> u
 }
 
 fn create_static_object(id: usize, world: &mut World, context: &mut RaylibContext) -> usize {
-    let mesh = Mesh::gen_mesh_cube(&context.thread, 5.0, 5.0, 6.0);
+    let mesh = Mesh::gen_mesh_cube(&context.thread, 50.0, 50.0, 6.0);
 
     world.models.insert(
         id,
@@ -76,7 +76,7 @@ fn create_static_object(id: usize, world: &mut World, context: &mut RaylibContex
     world.transforms.insert(id, Transform::identity());
     world
         .colliders
-        .insert(id, GeometryTree::from_cube(5.0, 5.0, 6.0));
+        .insert(id, GeometryTree::from_cube(50.0, 50.0, 6.0));
 
     id
 }
@@ -153,10 +153,14 @@ fn main() {
     let object1 = entity.reserve();
     create_static_object(object1, &mut world, &mut context);
 
+    let object2 = entity.reserve();
+    create_dynamic_object(object2, &mut world, &mut context);
+
     let camera = entity.reserve();
     create_orbit_camera(camera, local_player, &mut world);
 
-    world.transforms[object1].position = Vector3::new(10.0, 0.0, 0.0);
+    world.transforms[object2].position = Vector3::new(-10.0, 0.0, 0.0);
+    world.transforms[object1].position = Vector3::new(60.0, 0.0, 0.0);
 
     while !context.handle.window_should_close() {
         let dt = context.handle.get_frame_time();
@@ -180,12 +184,10 @@ fn main() {
                 )
                 .expect("Somehow the input of the current tick was not set");
 
-            let (colliding, non_colliding) =
-                get_collisions(&world.momenta, &world.transforms, &world.colliders, dt);
+            world.momenta[object2].apply_impulse(Vector3::Z * 5.0);
 
             step_world(
-                colliding,
-                non_colliding,
+                &world.colliders,
                 &mut world.momenta,
                 &mut world.transforms,
                 dt,
