@@ -3,8 +3,6 @@ use std::{
     ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
-use crate::physics::COLLISION_RESTITUTION;
-
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vector3 {
     pub x: f32,
@@ -742,16 +740,6 @@ impl Halfspace {
             negative,
         }
     }
-
-    pub fn normal(&self) -> Vector3 {
-        if self.positive.is_empty() || self.negative.is_solid() {
-            self.plane.normal
-        } else if self.negative.is_empty() || self.positive.is_solid() {
-            -self.plane.normal
-        } else {
-            Vector3::zero()
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -818,7 +806,7 @@ impl GeometryTree {
     }
 
     /// Move the tree by an offset
-    pub fn transform(&mut self, transform: Transform) {
+    pub fn transform(&mut self, transform: Transform) -> &mut Self {
         for x in &mut self.nodes {
             let offset_distance = transform.position.dot(x.plane.normal);
 
@@ -831,15 +819,15 @@ impl GeometryTree {
 
         transform.rotation.rotate_vector(self.bounds.min);
         transform.rotation.rotate_vector(self.bounds.max);
+
+        self
     }
 
     /// Perform a CSG union with another Tree
-    pub fn union(&mut self, tree: &GeometryTree) {
+    pub fn union(&mut self, tree: &mut GeometryTree) -> &mut Self {
         let root = self.nodes.len() as u32;
 
-        for node in &tree.nodes {
-            let mut node = node.clone();
-
+        for node in &mut tree.nodes {
             if node.negative.is_index() {
                 node.negative.0 += root;
             }
@@ -847,8 +835,6 @@ impl GeometryTree {
             if node.positive.is_index() {
                 node.positive.0 += root;
             }
-
-            self.nodes.push(node);
         }
 
         for x in &mut self.nodes {
@@ -861,16 +847,17 @@ impl GeometryTree {
             }
         }
 
+        self.nodes.append(&mut tree.nodes);
         self.bounds = self.bounds.union(tree.bounds);
+
+        self
     }
 
     /// Perform a CSG intersection with another Tree
-    pub fn intersection(&mut self, tree: &GeometryTree) {
+    pub fn intersection(&mut self, tree: &mut GeometryTree) -> &mut Self {
         let root = self.nodes.len() as u32;
 
-        for node in &tree.nodes {
-            let mut node = node.clone();
-
+        for node in &mut tree.nodes {
             if node.negative.is_index() {
                 node.negative.0 += root;
             }
@@ -878,8 +865,6 @@ impl GeometryTree {
             if node.positive.is_index() {
                 node.positive.0 += root;
             }
-
-            self.nodes.push(node);
         }
 
         for x in &mut self.nodes {
@@ -891,7 +876,11 @@ impl GeometryTree {
                 x.negative = HalfspaceContents::index(root);
             }
         }
+
+        self.nodes.append(&mut tree.nodes);
         self.bounds = self.bounds.intersection(tree.bounds);
+
+        self
     }
 
     /// Please note that this is an overestimation of the hull except in the case where radius is 0
@@ -908,7 +897,7 @@ impl GeometryTree {
             HalfspaceContents::index(0),
             0.0,
             length,
-            self.nodes[0].normal(),
+            self.nodes[0].plane.normal,
         ));
 
         while let Some((contents, t_min, t_max, normal)) = stack.pop() {
@@ -926,7 +915,7 @@ impl GeometryTree {
 
             let mut node = self.nodes[contents.get_index().unwrap() as usize].clone();
 
-            node.plane.distance += node.plane.normal.dot(node.normal()).signum() * radius;
+            node.plane.distance += node.plane.normal.dot(node.plane.normal).signum() * radius;
 
             let start_dist = node.plane.distance_to_point(origin + dir * t_min);
             let end_dist = node.plane.distance_to_point(origin + dir * t_max);
@@ -937,11 +926,11 @@ impl GeometryTree {
                 stack.push((node.negative, t_min, t_max, normal));
             } else if let Some(result) = node.plane.raycast(origin, dir) {
                 if start_dist >= 0.0 {
-                    stack.push((node.negative, result.1, t_max, node.normal()));
+                    stack.push((node.negative, result.1, t_max, node.plane.normal));
                     stack.push((node.positive, t_min, result.1, normal));
                 } else {
                     stack.push((node.positive, result.1, t_max, normal));
-                    stack.push((node.negative, t_min, result.1, node.normal()));
+                    stack.push((node.negative, t_min, result.1, node.plane.normal));
                 }
             }
         }

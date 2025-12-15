@@ -83,6 +83,12 @@ pub fn step_world(
         }
     }
 
+    if colliding.len() != 0 {
+        println!("Collding");
+    } else {
+        println!("Not colliding");
+    }
+
     for (collision, id_a) in colliding {
         let velocity = momenta[id_a].velocity;
         let mass = momenta[id_a].mass;
@@ -91,7 +97,8 @@ pub fn step_world(
         let impulse = collision.normal * -(1.0 + COLLISION_RESTITUTION) * velocity_along / mass;
 
         momenta[id_a].apply_impulse(impulse);
-        transforms[id_a].position = collision.position;
+        transforms[id_a].position = collision.position + momenta[id_a].velocity * dt;
+        momenta[id_a].velocity *= LINEAR_DAMPENING;
     }
 
     for id_a in non_colliding {

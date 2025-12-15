@@ -74,28 +74,15 @@ fn create_static_object(id: usize, world: &mut World, context: &mut RaylibContex
             .expect("Could not load model"),
     );
     world.transforms.insert(id, Transform::identity());
-    world
-        .colliders
-        .insert(id, GeometryTree::from_cube(50.0, 50.0, 6.0));
 
-    id
-}
+    let mut collider = GeometryTree::from_cube(50.0, 50.0, 5.0);
 
-fn create_dynamic_object(id: usize, world: &mut World, context: &mut RaylibContext) -> usize {
-    let mesh = Mesh::gen_mesh_cube(&context.thread, 5.0, 5.0, 5.0);
-
-    world.models.insert(
-        id,
-        context
-            .handle
-            .load_model_from_mesh(&context.thread, unsafe { mesh.make_weak() })
-            .expect("Could not load model"),
+    collider.union(
+        GeometryTree::from_cube(10.0, 10.0, 50.0)
+            .transform(Transform::from_position(Vector3::Z * 27.50)),
     );
-    world.transforms.insert(id, Transform::identity());
-    world
-        .colliders
-        .insert(id, GeometryTree::from_cube(5.0, 5.0, 5.0));
-    world.momenta.insert(id, Moment::new(50.0));
+
+    world.colliders.insert(id, collider);
 
     id
 }
@@ -153,13 +140,9 @@ fn main() {
     let object1 = entity.reserve();
     create_static_object(object1, &mut world, &mut context);
 
-    let object2 = entity.reserve();
-    create_dynamic_object(object2, &mut world, &mut context);
-
     let camera = entity.reserve();
     create_orbit_camera(camera, local_player, &mut world);
 
-    world.transforms[object2].position = Vector3::new(-10.0, 0.0, 0.0);
     world.transforms[object1].position = Vector3::new(60.0, 0.0, 0.0);
 
     while !context.handle.window_should_close() {
@@ -183,8 +166,6 @@ fn main() {
                     &mut world.transforms[local_player],
                 )
                 .expect("Somehow the input of the current tick was not set");
-
-            world.momenta[object2].apply_impulse(Vector3::Z * 5.0);
 
             step_world(
                 &world.colliders,
