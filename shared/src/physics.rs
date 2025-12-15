@@ -65,6 +65,10 @@ pub fn step_world(
                 continue;
             };
 
+            if collision.normal.length() == 0.0 {
+                println!("Zero normal");
+            }
+
             collision.position += transforms[*id_b].position;
 
             if let Some((earliest, _)) = &earliest_collision

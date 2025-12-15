@@ -77,10 +77,10 @@ fn create_static_object(id: usize, world: &mut World, context: &mut RaylibContex
 
     let mut collider = GeometryTree::from_cube(50.0, 50.0, 5.0);
 
-    collider.union(
-        GeometryTree::from_cube(40.0, 40.0, 50.0)
-            .transform(Transform::from_position(Vector3::Z * 27.50)),
-    );
+    let mut hole = GeometryTree::from_cube(40.0, 40.0, 50.0);
+    hole.invert();
+
+    collider.intersection(hole);
 
     world.colliders.insert(id, collider);
 
@@ -143,7 +143,7 @@ fn main() {
     let camera = entity.reserve();
     create_orbit_camera(camera, local_player, &mut world);
 
-    world.transforms[object1].position = Vector3::new(60.0, 0.0, 0.0);
+    world.transforms[object1].position = Vector3::new(0.0, 0.0, 0.0);
 
     while !context.handle.window_should_close() {
         let dt = context.handle.get_frame_time();

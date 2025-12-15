@@ -685,7 +685,7 @@ pub struct SpherecastData {
     pub t: f32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct HalfspaceContents(u32);
 
 impl HalfspaceContents {
@@ -702,6 +702,14 @@ impl HalfspaceContents {
 
     pub fn index(index: u32) -> Self {
         Self(index)
+    }
+
+    pub fn invert(&mut self) {
+        if self.is_solid() {
+            *self = Self::empty()
+        } else if self.is_empty() {
+            *self = Self::solid()
+        }
     }
 
     pub fn is_empty(self) -> bool {
@@ -739,6 +747,14 @@ impl Halfspace {
             positive,
             negative,
         }
+    }
+
+    pub fn invert(&mut self) {
+        self.plane = self.plane.flip();
+        self.positive.invert();
+        self.negative.invert();
+
+        std::mem::swap(&mut self.positive, &mut self.negative);
     }
 }
 
@@ -806,7 +822,7 @@ impl GeometryTree {
     }
 
     /// Move the tree by an offset
-    pub fn transform(&mut self, transform: Transform) -> &mut Self {
+    pub fn transform(&mut self, transform: Transform) {
         for x in &mut self.nodes {
             let offset_distance = transform.position.dot(x.plane.normal);
 
@@ -819,12 +835,16 @@ impl GeometryTree {
 
         transform.rotation.rotate_vector(self.bounds.min);
         transform.rotation.rotate_vector(self.bounds.max);
+    }
 
-        self
+    pub fn invert(&mut self) {
+        for x in &mut self.nodes {
+            x.invert();
+        }
     }
 
     /// Perform a CSG union with another Tree
-    pub fn union(&mut self, tree: &mut GeometryTree) -> &mut Self {
+    pub fn union(&mut self, mut tree: GeometryTree) {
         let root = self.nodes.len() as u32;
 
         for node in &mut tree.nodes {
@@ -849,12 +869,10 @@ impl GeometryTree {
 
         self.nodes.append(&mut tree.nodes);
         self.bounds = self.bounds.union(tree.bounds);
-
-        self
     }
 
     /// Perform a CSG intersection with another Tree
-    pub fn intersection(&mut self, tree: &mut GeometryTree) -> &mut Self {
+    pub fn intersection(&mut self, mut tree: GeometryTree) {
         let root = self.nodes.len() as u32;
 
         for node in &mut tree.nodes {
@@ -879,8 +897,6 @@ impl GeometryTree {
 
         self.nodes.append(&mut tree.nodes);
         self.bounds = self.bounds.intersection(tree.bounds);
-
-        self
     }
 
     /// Please note that this is an overestimation of the hull except in the case where radius is 0
@@ -893,20 +909,19 @@ impl GeometryTree {
         let dir = dir.normalize();
 
         let mut stack = Vec::with_capacity(32);
-        stack.push((
-            HalfspaceContents::index(0),
-            0.0,
-            length,
-            self.nodes[0].plane.normal,
-        ));
+        stack.push((HalfspaceContents::index(0), 0.0, length, None));
 
         while let Some((contents, t_min, t_max, normal)) = stack.pop() {
-            if contents.is_solid() {
+            if contents.is_solid()
+                && let Some(normal) = normal
+            {
                 return Some(SpherecastData {
-                    position: origin + dir * t_min + Self::COLLISION_SKIN_OFFSET * normal,
+                    position: origin + dir * t_min,
                     normal,
                     t: t_min,
                 });
+            } else if contents.is_solid() {
+                continue;
             }
 
             if contents.is_empty() {
@@ -915,7 +930,7 @@ impl GeometryTree {
 
             let mut node = self.nodes[contents.get_index().unwrap() as usize].clone();
 
-            node.plane.distance += node.plane.normal.dot(node.plane.normal).signum() * radius;
+            node.plane.distance += radius;
 
             let start_dist = node.plane.distance_to_point(origin + dir * t_min);
             let end_dist = node.plane.distance_to_point(origin + dir * t_max);
@@ -926,11 +941,11 @@ impl GeometryTree {
                 stack.push((node.negative, t_min, t_max, normal));
             } else if let Some(result) = node.plane.raycast(origin, dir) {
                 if start_dist >= 0.0 {
-                    stack.push((node.negative, result.1, t_max, node.plane.normal));
+                    stack.push((node.negative, result.1, t_max, Some(node.plane.normal)));
                     stack.push((node.positive, t_min, result.1, normal));
                 } else {
-                    stack.push((node.positive, result.1, t_max, normal));
-                    stack.push((node.negative, t_min, result.1, node.plane.normal));
+                    stack.push((node.positive, result.1, t_max, Some(node.plane.normal)));
+                    stack.push((node.negative, t_min, result.1, normal));
                 }
             }
         }
@@ -947,8 +962,23 @@ impl GeometryTree {
         let mut contents = HalfspaceContents::index(0);
 
         loop {
+            if contents.is_solid() {
+                return true;
+            }
+
+            if contents.is_empty() {
+                return false;
+            }
+
             let node = &self.nodes[contents.get_index().unwrap() as usize];
 
+            println!(
+                "{} {} {:?} {}",
+                node.plane.distance_to_point(point),
+                contents.get_index().unwrap(),
+                node.plane.normal,
+                node.plane.distance
+            );
             contents = if node.plane.distance_to_point(point) >= 0.0 {
                 node.positive
             } else {
