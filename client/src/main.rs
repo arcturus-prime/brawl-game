@@ -73,13 +73,15 @@ fn create_static_object(id: usize, world: &mut World, context: &mut RaylibContex
             .load_model_from_mesh(&context.thread, unsafe { mesh.make_weak() })
             .expect("Could not load model"),
     );
-    world.transforms.insert(id, Transform::identity());
+    world.transforms.insert(
+        id,
+        Transform::from_rotation(Quaternion::from_euler(0.0, 45.0, 45.0)),
+    );
 
     let mut collider = GeometryTree::from_cube(50.0, 50.0, 5.0);
-
     let mut hole = GeometryTree::from_cube(40.0, 40.0, 50.0);
-    hole.invert();
 
+    hole.invert();
     collider.intersection(hole);
 
     world.colliders.insert(id, collider);
@@ -127,7 +129,7 @@ fn get_current_input_state(context: &RaylibContext, camera_transform: &Transform
 }
 
 fn main() {
-    let (rl, thread) = raylib::init().size(1280, 720).title("Brawl Game").build();
+    let (rl, thread) = raylib::init().size(1600, 900).title("Brawl Game").build();
 
     let mut context = RaylibContext { handle: rl, thread };
     let mut world = World::new();

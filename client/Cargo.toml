@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 raylib = "5.5.1"
 shared = { workspace = true }
+winit = "0.30.12"
