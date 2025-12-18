@@ -23,6 +23,10 @@ impl Vector3 {
         Vector3::new(0.0, 0.0, 0.0)
     }
 
+    pub fn one() -> Self {
+        Vector3::new(1.0, 1.0, 1.0)
+    }
+
     pub fn dot(self, other: Vector3) -> f32 {
         self.x * other.x + self.y * other.y + self.z * other.z
     }
@@ -68,6 +72,18 @@ impl Vector3 {
 
     pub fn lerp(self, other: Vector3, t: f32) -> Vector3 {
         self + (other - self) * t
+    }
+
+    pub fn x_axis(self) -> Vector3 {
+        Vector3::new(self.x, 0.0, 0.0)
+    }
+
+    pub fn y_axis(self) -> Vector3 {
+        Vector3::new(0.0, self.y, 0.0)
+    }
+
+    pub fn z_axis(self) -> Vector3 {
+        Vector3::new(0.0, 0.0, self.z)
     }
 }
 
@@ -635,9 +651,14 @@ impl Transform {
         self.rotation.rotate_vector(point) + self.position
     }
 
+    pub fn rotate_vector(self, point: Vector3) -> Vector3 {
+        self.rotation.rotate_vector(point)
+    }
+
     pub fn inverse(self) -> Transform {
         let inv_rotation = self.rotation.inverse();
         let inv_position = inv_rotation.rotate_vector(-self.position);
+
         Transform {
             position: inv_position,
             rotation: inv_rotation,
@@ -686,7 +707,7 @@ pub struct SpherecastData {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct HalfspaceContents(u32);
+pub struct HalfspaceContents(u32);
 
 impl HalfspaceContents {
     const SOLID: u32 = u32::MAX;
@@ -734,7 +755,7 @@ impl HalfspaceContents {
 }
 
 #[derive(Clone)]
-struct Halfspace {
+pub struct Halfspace {
     plane: Plane,
     negative: HalfspaceContents,
     positive: HalfspaceContents,
@@ -766,6 +787,10 @@ pub struct GeometryTree {
 
 impl GeometryTree {
     pub const COLLISION_SKIN_OFFSET: f32 = 1e-2;
+
+    pub fn nodes(&self) -> &Vec<Halfspace> {
+        &self.nodes
+    }
 
     pub fn from_cube(size_x: f32, size_y: f32, size_z: f32) -> Self {
         let half_x = size_x / 2.0;
@@ -841,6 +866,11 @@ impl GeometryTree {
         for x in &mut self.nodes {
             x.invert();
         }
+
+        self.bounds = BoundingBox::new(
+            Vector3::one() * f32::NEG_INFINITY,
+            Vector3::one() * f32::INFINITY,
+        );
     }
 
     /// Perform a CSG union with another Tree
@@ -954,7 +984,7 @@ impl GeometryTree {
     }
 
     /// Perform a point containment test against the BSP
-    pub fn contains<'a>(&'a mut self, point: Vector3) -> bool {
+    pub fn contains(&mut self, point: Vector3) -> bool {
         if self.nodes.is_empty() {
             return false;
         }
@@ -972,13 +1002,6 @@ impl GeometryTree {
 
             let node = &self.nodes[contents.get_index().unwrap() as usize];
 
-            println!(
-                "{} {} {:?} {}",
-                node.plane.distance_to_point(point),
-                contents.get_index().unwrap(),
-                node.plane.normal,
-                node.plane.distance
-            );
             contents = if node.plane.distance_to_point(point) >= 0.0 {
                 node.positive
             } else {

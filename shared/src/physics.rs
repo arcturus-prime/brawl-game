@@ -51,13 +51,16 @@ pub fn step_world(
                 continue;
             }
 
-            let velocity = if let Some(moment_b) = momenta.get(*id_b) {
+            let world_velocity = if let Some(moment_b) = momenta.get(*id_b) {
                 moment_a.velocity - moment_b.velocity
             } else {
                 moment_a.velocity
             };
 
-            let position = transforms[*id_a].position - transforms[*id_b].position;
+            let b_inverse = transforms[*id_b].inverse();
+
+            let position = b_inverse.transform_vector(transforms[*id_a].position);
+            let velocity = b_inverse.rotate_vector(world_velocity);
 
             let Some(mut collision) =
                 body_b.spherecast(collider.get_bounds_radius(), position, velocity * dt)
@@ -65,11 +68,8 @@ pub fn step_world(
                 continue;
             };
 
-            if collision.normal.length() == 0.0 {
-                println!("Zero normal");
-            }
-
-            collision.position += transforms[*id_b].position;
+            collision.position = transforms[*id_b].transform_vector(collision.position);
+            collision.normal = transforms[*id_b].rotate_vector(collision.normal);
 
             if let Some((earliest, _)) = &earliest_collision
                 && earliest.t > collision.t
@@ -85,12 +85,6 @@ pub fn step_world(
         } else {
             non_colliding.push(*id_a);
         }
-    }
-
-    if colliding.len() != 0 {
-        println!("Collding");
-    } else {
-        println!("Not colliding");
     }
 
     for (collision, id_a) in colliding {

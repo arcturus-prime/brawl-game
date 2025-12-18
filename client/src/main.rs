@@ -1,208 +1,118 @@
-use std::f32::consts::PI;
-
-use raylib::{
-    color::Color,
-    models::{Mesh, Model, RaylibMesh, RaylibModel},
-    prelude::{RaylibDraw, RaylibDraw3D, RaylibMode3DExt},
-};
-use shared::{
-    math::{GeometryTree, Quaternion, Transform, Vector3},
-    physics::{Moment, step_world},
-    player::{InputState, PlayerData},
-    tick::Ticker,
-    utility::{EntityReserver, SparseSet},
-};
-
-use crate::{
-    math::vec_to_raylib,
-    render::{CameraData, CameraInput, CameraMode, RaylibContext},
-};
-
 mod math;
 mod render;
 
-pub struct World {
+use std::time::Instant;
+
+use shared::{
+    math::{GeometryTree, Transform},
+    physics::Moment,
+    player::PlayerData,
+    utility::SparseSet,
+};
+use vulkano::{buffer::BufferContents, padded::Padded};
+use winit::{
+    application::ApplicationHandler,
+    event::WindowEvent,
+    event_loop::{self, EventLoop},
+};
+
+use crate::render::{CameraData, RenderContext, Renderer};
+
+pub struct App {
     transforms: SparseSet<Transform>,
-    models: SparseSet<Model>,
     players: SparseSet<PlayerData>,
     colliders: SparseSet<GeometryTree>,
     momenta: SparseSet<Moment>,
     cameras: SparseSet<CameraData>,
+
+    renderer: Option<Renderer>,
+    context: Option<RenderContext>,
+
+    start_time: Instant,
 }
 
-impl World {
+impl App {
     pub fn new() -> Self {
         Self {
             transforms: SparseSet::default(),
-            models: SparseSet::default(),
             players: SparseSet::default(),
             colliders: SparseSet::default(),
             momenta: SparseSet::default(),
             cameras: SparseSet::default(),
+
+            renderer: None,
+            context: None,
+
+            start_time: Instant::now(),
         }
     }
 }
 
-fn create_player(id: usize, world: &mut World, context: &mut RaylibContext) -> usize {
-    let mesh = Mesh::gen_mesh_cube(&context.thread, 2.0, 2.0, 2.0);
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) {
+        if self.renderer.is_none() {
+            let renderer = match Renderer::new(event_loop) {
+                Ok(r) => r,
+                Err(e) => panic!("Failed to create renderer: {}", e),
+            };
 
-    world.models.insert(
-        id,
-        context
-            .handle
-            .load_model_from_mesh(&context.thread, unsafe { mesh.make_weak() })
-            .expect("Could not load model"),
-    );
-    world.players.insert(id, PlayerData::default());
-    world.momenta.insert(id, Moment::new(1.0));
-    world
-        .colliders
-        .insert(id, GeometryTree::from_cube(2.0, 2.0, 2.0));
-    world.transforms.insert(id, Transform::identity());
+            let shader = match render::compute_shader::load(renderer.device()) {
+                Ok(s) => s,
+                Err(e) => panic!("Failed to load shader: {}", e),
+            };
 
-    id
-}
+            let context = match renderer.create_context(event_loop, shader) {
+                Ok(c) => c,
+                Err(e) => panic!("Failed to create context: {}", e),
+            };
 
-fn create_static_object(id: usize, world: &mut World, context: &mut RaylibContext) -> usize {
-    let mesh = Mesh::gen_mesh_cube(&context.thread, 50.0, 50.0, 6.0);
-
-    world.models.insert(
-        id,
-        context
-            .handle
-            .load_model_from_mesh(&context.thread, unsafe { mesh.make_weak() })
-            .expect("Could not load model"),
-    );
-    world.transforms.insert(
-        id,
-        Transform::from_rotation(Quaternion::from_euler(0.0, 45.0, 45.0)),
-    );
-
-    let mut collider = GeometryTree::from_cube(50.0, 50.0, 5.0);
-    let mut hole = GeometryTree::from_cube(40.0, 40.0, 50.0);
-
-    hole.invert();
-    collider.intersection(hole);
-
-    world.colliders.insert(id, collider);
-
-    id
-}
-
-fn create_orbit_camera(id: usize, target: usize, world: &mut World) {
-    world.cameras.insert(id, CameraData::new());
-    world.cameras[id].switch_mode(CameraMode::Orbit {
-        theta: 0.0,
-        azimuth: 0.0,
-        distance: 10.0,
-        target,
-    });
-    world.transforms.insert(id, Transform::identity());
-}
-
-fn get_current_input_state(context: &RaylibContext, camera_transform: &Transform) -> InputState {
-    let mut direction = Vector3::zero();
-
-    if context.handle.is_key_down(raylib::ffi::KeyboardKey::KEY_W) {
-        direction += Vector3::X;
-    }
-
-    if context.handle.is_key_down(raylib::ffi::KeyboardKey::KEY_S) {
-        direction -= Vector3::X;
-    }
-
-    if context.handle.is_key_down(raylib::ffi::KeyboardKey::KEY_A) {
-        direction += Vector3::Y;
-    }
-
-    if context.handle.is_key_down(raylib::ffi::KeyboardKey::KEY_D) {
-        direction -= Vector3::Y;
-    }
-
-    InputState {
-        look_direction: camera_transform.rotation.rotate_vector(Vector3::X),
-        want_direction: camera_transform
-            .rotation
-            .rotate_vector(direction.normalize()),
-        throttle: 1.0,
-    }
-}
-
-fn main() {
-    let (rl, thread) = raylib::init().size(1600, 900).title("Brawl Game").build();
-
-    let mut context = RaylibContext { handle: rl, thread };
-    let mut world = World::new();
-    let mut entity = EntityReserver::default();
-    let mut ticker = Ticker::default();
-
-    let local_player = entity.reserve();
-    create_player(local_player, &mut world, &mut context);
-
-    let object1 = entity.reserve();
-    create_static_object(object1, &mut world, &mut context);
-
-    let camera = entity.reserve();
-    create_orbit_camera(camera, local_player, &mut world);
-
-    world.transforms[object1].position = Vector3::new(0.0, 0.0, 0.0);
-
-    while !context.handle.window_should_close() {
-        let dt = context.handle.get_frame_time();
-        let mouse_delta = context.handle.get_mouse_delta();
-
-        world.cameras[camera].handle_input(CameraInput {
-            delta_x: mouse_delta.x * 0.01,
-            delta_y: mouse_delta.y * 0.01,
-            delta_scroll: 0.0,
-        });
-
-        ticker.update(dt, |tick, dt| {
-            let input = get_current_input_state(&context, &world.transforms[camera]);
-
-            world.players[local_player].set_input(tick, input);
-            world.players[local_player]
-                .apply_input(
-                    tick,
-                    &mut world.momenta[local_player],
-                    &mut world.transforms[local_player],
-                )
-                .expect("Somehow the input of the current tick was not set");
-
-            step_world(
-                &world.colliders,
-                &mut world.momenta,
-                &mut world.transforms,
-                dt,
-            );
-        });
-
-        world.cameras[camera].update_tranform(&mut world.transforms, camera);
-
-        // RENDER
-
-        let mut draw = context.handle.begin_drawing(&context.thread);
-        draw.clear_background(Color::BLACK);
-
-        let mut draw_3d =
-            draw.begin_mode3D(world.cameras[camera].to_raylib(&world.transforms[camera]));
-
-        for (id, model) in world.models.iter() {
-            let pair = world.transforms[*id].rotation.to_axis_angle();
-
-            let position = vec_to_raylib(world.transforms[*id].position);
-            let rotation_axis = vec_to_raylib(pair.0);
-            let rotation_angle = pair.1 / (2.0 * PI) * 360.0;
-            let scale = vec_to_raylib(Vector3::new(1.0, 1.0, 1.0));
-
-            draw_3d.draw_model_ex(
-                model,
-                position,
-                rotation_axis,
-                rotation_angle,
-                scale,
-                Color::RED,
-            );
+            self.renderer = Some(renderer);
+            self.context = Some(context);
         }
     }
+
+    fn window_event(
+        &mut self,
+        event_loop: &event_loop::ActiveEventLoop,
+        window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        match event {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+            }
+            WindowEvent::Resized(_) => {
+                if let Some(ctx) = &mut self.context {
+                    ctx.recreate_swapchain()
+                        .expect("Could not recreate swapchain");
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                if let Some(context) = &mut self.context {
+                    let elapsed = self.start_time.elapsed().as_secs_f32();
+                    let window_size = context.window_size();
+
+                    let input = render::compute_shader::InputData {
+                        time: elapsed,
+                        resolution_x: window_size.0,
+                        resolution_y: Padded::from(window_size.1),
+                        camera_position: Padded::from([0.0, 0.0, 0.0]),
+                        camera_rotation: [0.0, 0.0, 0.0, 1.0],
+                    };
+
+                    if let Err(e) = context.render(input) {
+                        eprintln!("Render error: {}", e);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn main() {
+    let event_loop = EventLoop::new().unwrap();
+    let mut app = App::new();
+
+    event_loop.run_app(&mut app).unwrap();
 }
