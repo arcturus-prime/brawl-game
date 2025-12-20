@@ -1,22 +1,39 @@
 // render.rs - Cleaner, more modular version
 
-use std::{error::Error, sync::Arc};
+use shared::{
+    math::{GeometryTree, Halfspace, Plane, Transform},
+    utility::SparseSet,
+};
+use std::{
+    error::Error,
+    f32::INFINITY,
+    mem::{self, transmute},
+    sync::Arc,
+};
 use vulkano::{
     Validated, VulkanError, VulkanLibrary,
-    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
+    buffer::{self, Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage, allocator::StandardCommandBufferAllocator,
+        AutoCommandBufferBuilder, ClearColorImageInfo, ClearDepthStencilImageInfo,
+        CommandBufferUsage, PrimaryAutoCommandBuffer, allocator::StandardCommandBufferAllocator,
     },
     descriptor_set::{
-        DescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
+        DescriptorSet, WriteDescriptorSet,
+        allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo},
+        layout::DescriptorType,
     },
     device::{
         Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
         physical::{PhysicalDevice, PhysicalDeviceType},
     },
-    image::{Image, ImageUsage, view::ImageView},
+    format::ClearColorValue,
+    image::{
+        Image, ImageCreateInfo, ImageUsage,
+        view::{self, ImageView},
+    },
     instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
+    padded::Padded,
     pipeline::{
         ComputePipeline, Pipeline, PipelineLayout, PipelineShaderStageCreateInfo,
         compute::ComputePipelineCreateInfo, layout::PipelineDescriptorSetLayoutCreateInfo,
@@ -223,14 +240,79 @@ impl FrameSync {
     }
 }
 
-pub struct RenderContext {
+pub mod compute_shader {
+    vulkano_shaders::shader! {
+        ty: "compute",
+        path: "shader/compute.glsl"
+    }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy)]
+enum Material {
+    STEEL = 0,
+    PLASTIC = 1,
+    GLASS = 2,
+}
+
+pub struct Renderable {
+    geometry: Subbuffer<compute_shader::Geometry>,
+}
+
+impl Renderable {
+    pub fn set_nodes(&mut self, geometry: &GeometryTree) -> Result<(), Box<dyn Error>> {
+        if self.geometry.size()
+            < geometry.nodes().len() as u64 * size_of::<compute_shader::BSPNode>() as u64
+        {
+            return Err("Buffer not big enough".into());
+        }
+
+        let mut writer = self.geometry.write()?;
+
+        for (i, x) in geometry.nodes().iter().enumerate() {
+            let plane = x.plane;
+
+            writer.planes[i] = compute_shader::BSPNode {
+                plane: [
+                    plane.normal.x,
+                    plane.normal.y,
+                    plane.normal.z,
+                    plane.distance,
+                ],
+                positive: x.positive.0,
+                negative: x.negative.0,
+                material: writer.planes[i].material,
+                padding: 0,
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn set_materials(&mut self, materials: &[Material]) -> Result<(), Box<dyn Error>> {
+        let mut writer = self.geometry.write()?;
+
+        for (i, x) in materials.iter().enumerate() {
+            writer.planes[i].material = *x as u32;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct Renderer {
+    camera: Subbuffer<compute_shader::ViewData>,
+    depth_buffer: Arc<ImageView>,
+
+    library: Arc<VulkanLibrary>,
+    instance: Arc<Instance>,
     device: Arc<Device>,
     queue: Arc<Queue>,
     window: Arc<Window>,
     surface: Arc<Surface>,
 
-    swapchain_manager: SwapchainManager,
     compute_pipeline: Arc<ComputePipeline>,
+    swapchain_manager: SwapchainManager,
     frame_sync: FrameSync,
 
     memory_allocator: Arc<StandardMemoryAllocator>,
@@ -238,21 +320,217 @@ pub struct RenderContext {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
 }
 
-impl RenderContext {
-    pub fn render<T: BufferContents>(&mut self, input: T) -> Result<(), Box<dyn Error>> {
+impl Renderer {
+    pub fn new(event_loop: &ActiveEventLoop) -> Result<Self, Box<dyn Error>> {
+        let library = VulkanLibrary::new()?;
+        let instance = Self::create_instance(&library, event_loop)?;
+
+        let device_extensions = DeviceExtensions {
+            khr_swapchain: true,
+            ..DeviceExtensions::empty()
+        };
+
+        let (physical_device, queue_family_index) =
+            DeviceSelector::select(&instance, event_loop, &device_extensions)?;
+
+        let (device, mut queues) = Device::new(
+            physical_device,
+            DeviceCreateInfo {
+                enabled_extensions: device_extensions,
+                queue_create_infos: vec![QueueCreateInfo {
+                    queue_family_index,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )?;
+
+        let queue = queues.next().ok_or("Failed to get queue")?;
+
+        let window = Arc::new(event_loop.create_window(Window::default_attributes())?);
+        let surface = Surface::from_window(instance.clone(), window.clone())?;
+
+        let swapchain_manager = SwapchainManager::new(device.clone(), surface.clone(), &window)?;
+
+        let compute_shader = compute_shader::load(device.clone())?;
+        let compute_pipeline = Self::create_compute_pipeline(&device, compute_shader)?;
+
+        let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
+        let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+            device.clone(),
+            Default::default(),
+        ));
+
+        let command_buffer_allocator = Arc::new(StandardCommandBufferAllocator::new(
+            device.clone(),
+            Default::default(),
+        ));
+
+        let camera = Buffer::from_data(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::UNIFORM_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            compute_shader::ViewData {
+                resolution_x: window.inner_size().width,
+                resolution_y: Padded::from(window.inner_size().height),
+                camera_position: [0.0, 0.0, 0.0],
+                fov: 60.0,
+                camera_rotation: [0.0, 0.0, 0.0, 1.0],
+            },
+        )?;
+
+        let image = Image::new(
+            memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: vulkano::image::ImageType::Dim2d,
+                usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_DST,
+                format: vulkano::format::Format::R32_SFLOAT,
+                extent: [window.inner_size().width, window.inner_size().height, 1],
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )?;
+
+        let depth_buffer = ImageView::new_default(image)?;
+
+        Ok(Self {
+            depth_buffer,
+            camera,
+            memory_allocator,
+            descriptor_set_allocator,
+            command_buffer_allocator,
+            library,
+            instance,
+            device,
+            queue,
+            window,
+            surface,
+            swapchain_manager,
+            compute_pipeline,
+            frame_sync: FrameSync::new(),
+        })
+    }
+
+    pub fn create_renderable(&mut self, planes: usize) -> Result<Renderable, Box<dyn Error>> {
+        let geometry = Buffer::new_unsized(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            planes as u64 * 32,
+        )?;
+
+        Ok(Renderable { geometry })
+    }
+
+    fn set_camera(&mut self, transform: Transform, fov: f32) -> Result<(), Box<dyn Error>> {
+        let mut writer = self.camera.write()?;
+
+        let position = transform.position;
+        writer.camera_position = [position.x, position.y, position.z];
+
+        let rotation = transform.rotation;
+        writer.camera_rotation = [rotation.x, rotation.y, rotation.z, rotation.w];
+
+        writer.fov = fov;
+
+        Ok(())
+    }
+
+    fn begin_frame(
+        &self,
+    ) -> Result<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, Box<dyn Error>> {
+        let mut builder = AutoCommandBufferBuilder::primary(
+            self.command_buffer_allocator.clone(),
+            self.queue.queue_family_index(),
+            CommandBufferUsage::OneTimeSubmit,
+        )?;
+
+        builder.clear_color_image(ClearColorImageInfo {
+            clear_value: ClearColorValue::Float([1e30, 0.0, 0.0, 0.0]),
+            ..ClearColorImageInfo::image(self.depth_buffer.image().clone())
+        })?;
+
+        Ok(builder)
+    }
+
+    fn draw_renderable<'a>(
+        &self,
+        builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+        renderable: &Renderable,
+        transform: &Transform,
+        image_index: u32,
+    ) -> Result<&'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, Box<dyn Error>> {
+        let descriptor_set = self.create_descriptor_set(image_index, renderable)?;
+
+        let position = transform.position;
+        let rotation = transform.rotation;
+
+        let push_constant = compute_shader::PushData {
+            position: Padded::from([position.x, position.y, position.z]),
+            rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
+        };
+
+        let extent = self.swapchain_manager.images[0].extent();
+        let dispatch = Self::calculate_dispatch(extent, [8, 8, 1]);
+
+        unsafe {
+            builder
+                .bind_pipeline_compute(self.compute_pipeline.clone())?
+                .bind_descriptor_sets(
+                    vulkano::pipeline::PipelineBindPoint::Compute,
+                    self.compute_pipeline.layout().clone(),
+                    0,
+                    descriptor_set,
+                )?
+                .push_constants(self.compute_pipeline.layout().clone(), 0, push_constant)?
+                .dispatch(dispatch)?;
+        }
+
+        Ok(builder)
+    }
+
+    pub fn draw_scene(
+        &mut self,
+        camera: Transform,
+        fov: f32,
+        renderables: &SparseSet<Renderable>,
+        tranforms: &SparseSet<Transform>,
+    ) -> Result<(), Box<dyn Error>> {
         self.frame_sync.wait_for_previous();
+        self.set_camera(camera, fov)?;
 
         let (image_index, future) = match self.acquire_image()? {
             Some(result) => result,
             None => return Ok(()),
         };
 
-        let descriptor_set = self.create_descriptor_set(input, image_index)?;
-        let command_buffer = self.build_command_buffer(descriptor_set)?;
+        let mut builder = self.begin_frame()?;
+        for (id, renderable) in renderables.iter() {
+            self.draw_renderable(&mut builder, renderable, &tranforms[*id], image_index)?;
+        }
+
+        let command_buffer = builder.build()?;
 
         self.submit_and_present(future, command_buffer, image_index)?;
-
         self.window.request_redraw();
+
         Ok(())
     }
 
@@ -264,35 +542,23 @@ impl RenderContext {
                 if suboptimal {
                     self.recreate_swapchain()?;
                 }
+
                 Ok(Some((index, future.boxed())))
             }
             Err(VulkanError::OutOfDate) => {
                 self.recreate_swapchain()?;
+
                 Ok(None)
             }
             Err(e) => Err(e.into()),
         }
     }
 
-    fn create_descriptor_set<T: BufferContents>(
+    fn create_descriptor_set(
         &self,
-        input: T,
         image_index: u32,
+        renderable: &Renderable,
     ) -> Result<Arc<DescriptorSet>, Box<dyn Error>> {
-        let uniform_buffer = Buffer::from_data(
-            self.memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            input,
-        )?;
-
         let layout = self
             .compute_pipeline
             .layout()
@@ -308,38 +574,12 @@ impl RenderContext {
                     0,
                     self.swapchain_manager.image_views[image_index as usize].clone(),
                 ),
-                WriteDescriptorSet::buffer(1, uniform_buffer),
+                WriteDescriptorSet::image_view(1, self.depth_buffer.clone()),
+                WriteDescriptorSet::buffer(2, self.camera.clone()),
+                WriteDescriptorSet::buffer(3, renderable.geometry.clone()),
             ],
             [],
         )?)
-    }
-
-    fn build_command_buffer(
-        &self,
-        descriptor_set: Arc<DescriptorSet>,
-    ) -> Result<Arc<vulkano::command_buffer::PrimaryAutoCommandBuffer>, Box<dyn Error>> {
-        let mut builder = AutoCommandBufferBuilder::primary(
-            self.command_buffer_allocator.clone(),
-            self.queue.queue_family_index(),
-            CommandBufferUsage::OneTimeSubmit,
-        )?;
-
-        let extent = self.swapchain_manager.images[0].extent();
-        let dispatch = Self::calculate_dispatch(extent, [8, 8, 1]);
-
-        unsafe {
-            builder
-                .bind_pipeline_compute(self.compute_pipeline.clone())?
-                .bind_descriptor_sets(
-                    vulkano::pipeline::PipelineBindPoint::Compute,
-                    self.compute_pipeline.layout().clone(),
-                    0,
-                    descriptor_set,
-                )?
-                .dispatch(dispatch)?;
-        }
-
-        Ok(builder.build()?)
     }
 
     fn calculate_dispatch(extent: [u32; 3], workgroup: [u32; 3]) -> [u32; 3] {
@@ -385,68 +625,32 @@ impl RenderContext {
     }
 
     pub fn recreate_swapchain(&mut self) -> Result<(), Box<dyn Error>> {
-        self.swapchain_manager.recreate(&self.window)
-    }
-
-    pub fn window_size(&self) -> (u32, u32) {
-        let size = self.window.inner_size();
-
-        (size.width, size.height)
-    }
-}
-
-pub struct Renderer {
-    library: Arc<VulkanLibrary>,
-    instance: Arc<Instance>,
-    device: Arc<Device>,
-    queue: Arc<Queue>,
-    memory_allocator: Arc<StandardMemoryAllocator>,
-    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
-    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
-}
-
-impl Renderer {
-    pub fn new(event_loop: &ActiveEventLoop) -> Result<Self, Box<dyn Error>> {
-        let library = VulkanLibrary::new()?;
-        let instance = Self::create_instance(&library, event_loop)?;
-
-        let device_extensions = DeviceExtensions {
-            khr_swapchain: true,
-            ..DeviceExtensions::empty()
-        };
-
-        let (physical_device, queue_family_index) =
-            DeviceSelector::select(&instance, event_loop, &device_extensions)?;
-
-        let (device, mut queues) = Device::new(
-            physical_device,
-            DeviceCreateInfo {
-                enabled_extensions: device_extensions,
-                queue_create_infos: vec![QueueCreateInfo {
-                    queue_family_index,
-                    ..Default::default()
-                }],
+        self.swapchain_manager.recreate(&self.window)?;
+        self.depth_buffer = ImageView::new_default(Image::new(
+            self.memory_allocator.clone(),
+            ImageCreateInfo {
+                image_type: vulkano::image::ImageType::Dim2d,
+                usage: ImageUsage::STORAGE | ImageUsage::TRANSFER_DST,
+                format: vulkano::format::Format::R32_SFLOAT,
+                extent: [
+                    self.window.inner_size().width,
+                    self.window.inner_size().height,
+                    1,
+                ],
                 ..Default::default()
             },
-        )?;
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        )?)?;
 
-        let queue = queues.next().ok_or("Failed to get queue")?;
+        let mut camera_writer = self.camera.write()?;
 
-        Ok(Self {
-            library,
-            instance,
-            memory_allocator: Arc::new(StandardMemoryAllocator::new_default(device.clone())),
-            descriptor_set_allocator: Arc::new(StandardDescriptorSetAllocator::new(
-                device.clone(),
-                Default::default(),
-            )),
-            command_buffer_allocator: Arc::new(StandardCommandBufferAllocator::new(
-                device.clone(),
-                Default::default(),
-            )),
-            device,
-            queue,
-        })
+        camera_writer.resolution_x = self.window.inner_size().width;
+        camera_writer.resolution_y = Padded::from(self.window.inner_size().height);
+
+        Ok(())
     }
 
     fn create_instance(
@@ -463,32 +667,6 @@ impl Renderer {
                 ..Default::default()
             },
         )?)
-    }
-
-    pub fn create_context(
-        &self,
-        event_loop: &ActiveEventLoop,
-        compute_shader: Arc<ShaderModule>,
-    ) -> Result<RenderContext, Box<dyn Error>> {
-        let window = Arc::new(event_loop.create_window(Window::default_attributes())?);
-        let surface = Surface::from_window(self.instance.clone(), window.clone())?;
-
-        let swapchain_mgr = SwapchainManager::new(self.device.clone(), surface.clone(), &window)?;
-
-        let compute_pipeline = Self::create_compute_pipeline(&self.device, compute_shader)?;
-
-        Ok(RenderContext {
-            device: self.device.clone(),
-            queue: self.queue.clone(),
-            window,
-            surface,
-            swapchain_manager: swapchain_mgr,
-            compute_pipeline,
-            frame_sync: FrameSync::new(),
-            memory_allocator: self.memory_allocator.clone(),
-            descriptor_set_allocator: self.descriptor_set_allocator.clone(),
-            command_buffer_allocator: self.command_buffer_allocator.clone(),
-        })
     }
 
     fn create_compute_pipeline(
@@ -512,38 +690,5 @@ impl Renderer {
             None,
             ComputePipelineCreateInfo::stage_layout(stage, layout),
         )?)
-    }
-
-    pub fn device(&self) -> Arc<Device> {
-        self.device.clone()
-    }
-}
-pub mod compute_shader {
-    vulkano_shaders::shader! {
-        ty: "compute",
-        src: r"
-            #version 450
-            layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-
-            layout(set = 0, binding = 0, rgba8) uniform writeonly image2D img;
-            layout(set = 0, binding = 1) uniform InputData {
-                float time;
-                uint resolution_x;
-                uint resolution_y;
-                vec3 camera_position;
-                vec4 camera_rotation;
-            } data_in;
-
-            void main() {
-                ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-                vec2 uv = vec2(pixel) / vec2(data_in.resolution_x, data_in.resolution_y);
-
-                // Animated color pattern
-                float t = data_in.time;
-                vec3 color = 0.5 + 0.5 * cos(t + uv.xyx + vec3(0.0, 2.0, 4.0));
-
-                imageStore(img, pixel, vec4(color, 1.0));
-            }
-        "
     }
 }

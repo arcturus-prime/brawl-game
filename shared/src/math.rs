@@ -707,7 +707,7 @@ pub struct SpherecastData {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct HalfspaceContents(u32);
+pub struct HalfspaceContents(pub u32);
 
 impl HalfspaceContents {
     const SOLID: u32 = u32::MAX;
@@ -756,9 +756,9 @@ impl HalfspaceContents {
 
 #[derive(Clone)]
 pub struct Halfspace {
-    plane: Plane,
-    negative: HalfspaceContents,
-    positive: HalfspaceContents,
+    pub plane: Plane,
+    pub negative: HalfspaceContents,
+    pub positive: HalfspaceContents,
 }
 
 impl Halfspace {
@@ -788,7 +788,7 @@ pub struct GeometryTree {
 impl GeometryTree {
     pub const COLLISION_SKIN_OFFSET: f32 = 1e-2;
 
-    pub fn nodes(&self) -> &Vec<Halfspace> {
+    pub fn nodes(&self) -> &[Halfspace] {
         &self.nodes
     }
 

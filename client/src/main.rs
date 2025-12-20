@@ -1,22 +1,21 @@
-mod math;
-mod render;
-
-use std::time::Instant;
+use std::f32::consts::PI;
 
 use shared::{
-    math::{GeometryTree, Transform},
+    math::{GeometryTree, Quaternion, Transform, Vector3},
     physics::Moment,
     player::PlayerData,
-    utility::SparseSet,
+    utility::{IdReserver, SparseSet},
 };
-use vulkano::{buffer::BufferContents, padded::Padded};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::{self, EventLoop},
 };
 
-use crate::render::{CameraData, RenderContext, Renderer};
+use crate::render::{CameraData, Renderable, Renderer};
+
+mod math;
+mod render;
 
 pub struct App {
     transforms: SparseSet<Transform>,
@@ -24,26 +23,63 @@ pub struct App {
     colliders: SparseSet<GeometryTree>,
     momenta: SparseSet<Moment>,
     cameras: SparseSet<CameraData>,
+    renderable: SparseSet<Renderable>,
 
     renderer: Option<Renderer>,
-    context: Option<RenderContext>,
-
-    start_time: Instant,
+    camera_id: usize,
+    object_a: usize,
+    reserver: IdReserver,
 }
 
 impl App {
     pub fn new() -> Self {
+        let mut reserver = IdReserver::default();
+        let camera_id = reserver.reserve();
+        let object_a = reserver.reserve();
+
+        let mut cameras = SparseSet::default();
+        cameras.insert(
+            camera_id,
+            CameraData {
+                mode: render::CameraMode::Fixed,
+                fov_y: 60.0,
+            },
+        );
+
+        let mut transforms = SparseSet::default();
+        transforms.insert(
+            camera_id,
+            Transform::from_rotation(Quaternion::from_euler(
+                0.0,
+                PI * 2.0 / 12.0,
+                PI * 2.0 / 10.0,
+            )),
+        );
+        transforms.insert(
+            object_a,
+            Transform::from_position(Vector3::new(0.0, 0.0, -20.0)),
+        );
+
+        let mut colliders = SparseSet::default();
+        colliders.insert(object_a, GeometryTree::from_cube(5.0, 5.0, 5.0));
+
+        let renderable = SparseSet::default();
+        let players = SparseSet::default();
+
         Self {
-            transforms: SparseSet::default(),
-            players: SparseSet::default(),
-            colliders: SparseSet::default(),
             momenta: SparseSet::default(),
-            cameras: SparseSet::default(),
+            renderable,
+
+            cameras,
+            transforms,
+            colliders,
+            players,
 
             renderer: None,
-            context: None,
 
-            start_time: Instant::now(),
+            object_a,
+            camera_id,
+            reserver,
         }
     }
 }
@@ -51,23 +87,19 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) {
         if self.renderer.is_none() {
-            let renderer = match Renderer::new(event_loop) {
+            let mut renderer = match Renderer::new(event_loop) {
                 Ok(r) => r,
                 Err(e) => panic!("Failed to create renderer: {}", e),
             };
 
-            let shader = match render::compute_shader::load(renderer.device()) {
-                Ok(s) => s,
-                Err(e) => panic!("Failed to load shader: {}", e),
-            };
+            let mut renderable = renderer.create_renderable(6).unwrap();
+            renderable
+                .set_nodes(&self.colliders[self.object_a])
+                .unwrap();
 
-            let context = match renderer.create_context(event_loop, shader) {
-                Ok(c) => c,
-                Err(e) => panic!("Failed to create context: {}", e),
-            };
+            self.renderable.insert(self.object_a, renderable);
 
             self.renderer = Some(renderer);
-            self.context = Some(context);
         }
     }
 
@@ -82,25 +114,19 @@ impl ApplicationHandler for App {
                 event_loop.exit();
             }
             WindowEvent::Resized(_) => {
-                if let Some(ctx) = &mut self.context {
+                if let Some(ctx) = &mut self.renderer {
                     ctx.recreate_swapchain()
                         .expect("Could not recreate swapchain");
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Some(context) = &mut self.context {
-                    let elapsed = self.start_time.elapsed().as_secs_f32();
-                    let window_size = context.window_size();
-
-                    let input = render::compute_shader::InputData {
-                        time: elapsed,
-                        resolution_x: window_size.0,
-                        resolution_y: Padded::from(window_size.1),
-                        camera_position: Padded::from([0.0, 0.0, 0.0]),
-                        camera_rotation: [0.0, 0.0, 0.0, 1.0],
-                    };
-
-                    if let Err(e) = context.render(input) {
+                if let Some(context) = &mut self.renderer {
+                    if let Err(e) = context.draw_scene(
+                        self.transforms[self.camera_id],
+                        60.0,
+                        &self.renderable,
+                        &self.transforms,
+                    ) {
                         eprintln!("Render error: {}", e);
                     }
                 }

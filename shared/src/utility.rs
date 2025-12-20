@@ -132,11 +132,11 @@ impl<'a, T> Iterator for SparseSetIterMut<'a, T> {
 }
 
 #[derive(Default)]
-pub struct EntityReserver {
+pub struct IdReserver {
     id: usize,
 }
 
-impl EntityReserver {
+impl IdReserver {
     pub fn reserve(&mut self) -> usize {
         let id = self.id;
         self.id += 1;
