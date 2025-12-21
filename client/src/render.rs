@@ -1,7 +1,7 @@
 // render.rs - Cleaner, more modular version
 
 use shared::{
-    math::{GeometryTree, Transform},
+    math::{GeometryTree, Quaternion, Transform, Vector3},
     utility::SparseSet,
 };
 use std::{error::Error, sync::Arc};
@@ -77,6 +77,24 @@ impl CameraData {
             *theta += input.delta_x;
             *azimuth += input.delta_y;
             *distance += input.delta_scroll;
+        }
+    }
+
+    pub fn update_tranform(&self, transforms: &mut SparseSet<Transform>, id: usize) {
+        match self.mode {
+            CameraMode::Orbit {
+                theta,
+                azimuth,
+                distance,
+                target,
+            } => {
+                let rotation = Quaternion::from_euler(0.0, azimuth, theta);
+
+                transforms[id].position =
+                    transforms[target].position - rotation.rotate_vector(Vector3::X) * distance;
+                transforms[id].rotation = rotation
+            }
+            CameraMode::Fixed => {}
         }
     }
 }
@@ -254,7 +272,7 @@ impl Renderable {
         for (i, x) in geometry.nodes().iter().enumerate() {
             let plane = x.plane;
 
-            writer.planes[i] = compute_shader::BSPNode {
+            writer.nodes[i] = compute_shader::BSPNode {
                 plane: [
                     plane.normal.x,
                     plane.normal.y,
@@ -263,8 +281,8 @@ impl Renderable {
                 ],
                 positive: x.positive.0,
                 negative: x.negative.0,
-                parent: 0,
-                t_min_max: 0x0000FFFF,
+                padding1: 0,
+                padding2: 0,
             }
         }
 
@@ -393,11 +411,11 @@ impl Renderer {
         })
     }
 
-    pub fn create_renderable(&mut self, planes: usize) -> Result<Renderable, Box<dyn Error>> {
+    pub fn create_renderable(&mut self) -> Result<Renderable, Box<dyn Error>> {
         let geometry = Buffer::new_unsized(
             self.memory_allocator.clone(),
             BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
+                usage: BufferUsage::UNIFORM_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {
@@ -405,7 +423,7 @@ impl Renderer {
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            planes as u64 * 32,
+            32 * 1024,
         )?;
 
         Ok(Renderable { geometry })

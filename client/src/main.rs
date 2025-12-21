@@ -10,9 +10,10 @@ use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::{self, EventLoop},
+    keyboard::PhysicalKey,
 };
 
-use crate::render::{CameraData, Renderable, Renderer};
+use crate::render::{CameraData, CameraInput, Renderable, Renderer};
 
 mod render;
 
@@ -40,20 +41,18 @@ impl App {
         cameras.insert(
             camera_id,
             CameraData {
-                mode: render::CameraMode::Fixed,
+                mode: render::CameraMode::Orbit {
+                    theta: 0.0,
+                    azimuth: 0.0,
+                    distance: 10.0,
+                    target: object_a,
+                },
                 fov_y: 60.0,
             },
         );
 
         let mut transforms = SparseSet::default();
-        transforms.insert(
-            camera_id,
-            Transform::from_rotation(Quaternion::from_euler(
-                0.0,
-                PI * 2.0 / 12.0,
-                PI * 2.0 / 10.0,
-            )),
-        );
+        transforms.insert(camera_id, Transform::identity());
         transforms.insert(
             object_a,
             Transform::from_position(Vector3::new(0.0, 0.0, -20.0)),
@@ -91,7 +90,7 @@ impl ApplicationHandler for App {
                 Err(e) => panic!("Failed to create renderer: {}", e),
             };
 
-            let mut renderable = renderer.create_renderable(6).unwrap();
+            let mut renderable = renderer.create_renderable().unwrap();
             renderable
                 .set_nodes(&self.colliders[self.object_a])
                 .unwrap();
@@ -119,6 +118,8 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
+
                 if let Some(context) = &mut self.renderer {
                     if let Err(e) = context.draw_scene(
                         self.transforms[self.camera_id],
@@ -128,6 +129,19 @@ impl ApplicationHandler for App {
                     ) {
                         eprintln!("Render error: {}", e);
                     }
+                }
+            }
+            WindowEvent::KeyboardInput {
+                device_id,
+                event,
+                is_synthetic,
+            } => {
+                if event.physical_key == PhysicalKey::Code(winit::keyboard::KeyCode::ArrowDown) {
+                    self.cameras[self.camera_id].handle_input(CameraInput {
+                        delta_x: 0.001,
+                        delta_y: 0.0,
+                        delta_scroll: 0.0,
+                    });
                 }
             }
             _ => {}
