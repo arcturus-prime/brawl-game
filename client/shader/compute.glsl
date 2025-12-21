@@ -18,23 +18,22 @@ layout(set = 0, binding = 2) uniform readonly ViewData {
     vec4 camera_rotation;
 } view_data;
 
-#define SOLID 0xFFFFFFFF
-#define EMPTY 0xFFFFFFFE
-#define MAX_DEPTH 64
+#define LEAF 0x80000000
+#define EMPTY 0xFFFFFFFF
 
-#define MATERIAL_STEEL 0
-#define MATERIAL_PLASTIC 1
-#define MATERIAL_GLASS 2
+#define STEEL 0x0
+#define PLASTIC 0x1
+#define GLASS 0x2
 
 struct BSPNode {
     vec4 plane;
     uint positive;
     uint negative;
-    uint material;
-    uint padding;
+    uint parent;
+    uint t_min_max;
 };
 
-layout(set = 0, binding = 3) buffer readonly Geometry {
+layout(set = 0, binding = 3) uniform readonly Geometry {
     BSPNode planes[];
 } geometry;
 
@@ -55,6 +54,7 @@ void transform_ray_to_local(inout vec3 origin, inout vec3 direction) {
 
 float intersect_plane(vec3 origin, vec3 direction, vec3 normal, float distance) {
     float denom = dot(direction, normal);
+
     if (abs(denom) < 1e-6) return -1.0;
 
     float t = -(dot(origin, normal) + distance) / denom;
@@ -83,8 +83,10 @@ void main() {
     vec3 ray_origin = view_data.camera_position;
     transform_ray_to_local(ray_origin, ray_direction);
 
-    float a = intersect_plane(ray_origin, ray_direction, geometry.planes[0].plane.xyz, geometry.planes[0].plane.w);
+    uint current = 0;
 
-    imageStore(img, pixel, vec4(a, 0.0, 0.0, 0.0));
-    imageStore(depth_img, pixel, vec4(a, 0.0, 0.0, 0.0));
+    while (current < LEAF || current == EMPTY) {}
+
+    imageStore(img, pixel, vec4(1.0, 0.0, 0.0, 0.0));
+    imageStore(depth_img, pixel, vec4(1.0, 0.0, 0.0, 0.0));
 }

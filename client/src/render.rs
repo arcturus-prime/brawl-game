@@ -1,36 +1,26 @@
 // render.rs - Cleaner, more modular version
 
 use shared::{
-    math::{GeometryTree, Halfspace, Plane, Transform},
+    math::{GeometryTree, Transform},
     utility::SparseSet,
 };
-use std::{
-    error::Error,
-    f32::INFINITY,
-    mem::{self, transmute},
-    sync::Arc,
-};
+use std::{error::Error, sync::Arc};
 use vulkano::{
     Validated, VulkanError, VulkanLibrary,
-    buffer::{self, Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
+    buffer::{Buffer, BufferCreateInfo, BufferUsage, Subbuffer},
     command_buffer::{
-        AutoCommandBufferBuilder, ClearColorImageInfo, ClearDepthStencilImageInfo,
-        CommandBufferUsage, PrimaryAutoCommandBuffer, allocator::StandardCommandBufferAllocator,
+        AutoCommandBufferBuilder, ClearColorImageInfo, CommandBufferUsage,
+        PrimaryAutoCommandBuffer, allocator::StandardCommandBufferAllocator,
     },
     descriptor_set::{
-        DescriptorSet, WriteDescriptorSet,
-        allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo},
-        layout::DescriptorType,
+        DescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
     },
     device::{
         Device, DeviceCreateInfo, DeviceExtensions, Queue, QueueCreateInfo, QueueFlags,
         physical::{PhysicalDevice, PhysicalDeviceType},
     },
     format::ClearColorValue,
-    image::{
-        Image, ImageCreateInfo, ImageUsage,
-        view::{self, ImageView},
-    },
+    image::{Image, ImageCreateInfo, ImageUsage, view::ImageView},
     instance::{Instance, InstanceCreateFlags, InstanceCreateInfo},
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     padded::Padded,
@@ -247,14 +237,6 @@ pub mod compute_shader {
     }
 }
 
-#[repr(u32)]
-#[derive(Clone, Copy)]
-enum Material {
-    STEEL = 0,
-    PLASTIC = 1,
-    GLASS = 2,
-}
-
 pub struct Renderable {
     geometry: Subbuffer<compute_shader::Geometry>,
 }
@@ -281,19 +263,9 @@ impl Renderable {
                 ],
                 positive: x.positive.0,
                 negative: x.negative.0,
-                material: writer.planes[i].material,
-                padding: 0,
+                parent: 0,
+                t_min_max: 0x0000FFFF,
             }
-        }
-
-        Ok(())
-    }
-
-    pub fn set_materials(&mut self, materials: &[Material]) -> Result<(), Box<dyn Error>> {
-        let mut writer = self.geometry.write()?;
-
-        for (i, x) in materials.iter().enumerate() {
-            writer.planes[i].material = *x as u32;
         }
 
         Ok(())

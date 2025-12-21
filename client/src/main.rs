@@ -14,7 +14,6 @@ use winit::{
 
 use crate::render::{CameraData, Renderable, Renderer};
 
-mod math;
 mod render;
 
 pub struct App {
@@ -61,7 +60,7 @@ impl App {
         );
 
         let mut colliders = SparseSet::default();
-        colliders.insert(object_a, GeometryTree::from_cube(5.0, 5.0, 5.0));
+        colliders.insert(object_a, GeometryTree::from_cube(5.0, 5.0, 5.0, 0));
 
         let renderable = SparseSet::default();
         let players = SparseSet::default();

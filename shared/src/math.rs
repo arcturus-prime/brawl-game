@@ -176,6 +176,7 @@ impl Quaternion {
         let c = half_angle.cos();
 
         let normalized_axis = axis.normalize();
+
         Quaternion::new(
             normalized_axis.x * s,
             normalized_axis.y * s,
@@ -230,6 +231,7 @@ impl Quaternion {
 
     pub fn normalize(self) -> Quaternion {
         let len = self.length();
+
         if len > EPSILON {
             self / len
         } else {
@@ -243,8 +245,10 @@ impl Quaternion {
 
     pub fn inverse(self) -> Quaternion {
         let len_sq = self.length_squared();
+
         if len_sq > EPSILON {
             let inv_len_sq = 1.0 / len_sq;
+
             Quaternion::new(
                 -self.x * inv_len_sq,
                 -self.y * inv_len_sq,
@@ -268,6 +272,7 @@ impl Quaternion {
     pub fn rotate_vector(self, v: Vector3) -> Vector3 {
         let q_xyz = Vector3::new(self.x, self.y, self.z);
         let t = q_xyz.cross(v) * 2.0;
+
         v + (t * self.w) + q_xyz.cross(t)
     }
 
@@ -275,6 +280,7 @@ impl Quaternion {
         let mut dot = self.dot(other);
 
         let mut other_adjusted = other;
+
         if dot < 0.0 {
             other_adjusted = -other_adjusted;
             dot = -dot;
@@ -283,7 +289,6 @@ impl Quaternion {
         let dot = dot.clamp(-1.0, 1.0);
 
         if dot > 0.9995 {
-            // Use linear interpolation for very close quaternions
             return (self + (other_adjusted - self) * t).normalize();
         }
 
@@ -328,6 +333,7 @@ impl Quaternion {
 
         if trace > 0.0 {
             let s = (trace + 1.0).sqrt() * 2.0;
+
             Quaternion::new(
                 (up.z - forward.y) / s,
                 (forward.x - right.z) / s,
@@ -336,6 +342,7 @@ impl Quaternion {
             )
         } else if right.x > up.y && right.x > forward.z {
             let s = (1.0 + right.x - up.y - forward.z).sqrt() * 2.0;
+
             Quaternion::new(
                 s / 4.0,
                 (right.y + up.x) / s,
@@ -344,6 +351,7 @@ impl Quaternion {
             )
         } else if up.y > forward.z {
             let s = (1.0 + up.y - right.x - forward.z).sqrt() * 2.0;
+
             Quaternion::new(
                 (right.y + up.x) / s,
                 s / 4.0,
@@ -352,6 +360,7 @@ impl Quaternion {
             )
         } else {
             let s = (1.0 + forward.z - right.x - up.y).sqrt() * 2.0;
+
             Quaternion::new(
                 (forward.x + right.z) / s,
                 (up.z + forward.y) / s,
@@ -495,6 +504,7 @@ pub struct Plane {
 impl Plane {
     pub fn new(normal: Vector3, distance: f32) -> Self {
         let normalized = normal.normalize();
+
         Plane {
             normal: normalized,
             distance,
@@ -504,6 +514,7 @@ impl Plane {
     pub fn from_point_normal(point: Vector3, normal: Vector3) -> Self {
         let normalized = normal.normalize();
         let distance = normalized.dot(point);
+
         Plane {
             normal: normalized,
             distance,
@@ -513,8 +524,10 @@ impl Plane {
     pub fn from_points(p1: Vector3, p2: Vector3, p3: Vector3) -> Self {
         let v1 = p2 - p1;
         let v2 = p3 - p1;
+
         let normal = v1.cross(v2).normalize();
         let distance = normal.dot(p1);
+
         Plane { normal, distance }
     }
 
@@ -524,11 +537,8 @@ impl Plane {
 
     pub fn project_point(self, point: Vector3) -> Vector3 {
         let dist = self.distance_to_point(point);
-        point - self.normal * dist
-    }
 
-    pub fn closest_point(self, point: Vector3) -> Vector3 {
-        self.project_point(point)
+        point - self.normal * dist
     }
 
     pub fn raycast(self, start: Vector3, direction: Vector3) -> Option<(Vector3, f32)> {
@@ -710,18 +720,23 @@ pub struct SpherecastData {
 pub struct HalfspaceContents(pub u32);
 
 impl HalfspaceContents {
-    const SOLID: u32 = u32::MAX;
-    const EMPTY: u32 = u32::MAX - 1;
+    pub fn solid(metadata: u32) -> Self {
+        if metadata >= 0x7FFFFFFF {
+            panic!("That metadata is reserved for empty nodes");
+        }
 
-    pub fn solid() -> Self {
-        Self(Self::SOLID)
+        Self(0x80000000 | metadata)
     }
 
     pub fn empty() -> Self {
-        Self(Self::EMPTY)
+        Self(0xFFFFFFFF)
     }
 
     pub fn index(index: u32) -> Self {
+        if index >= 0x80000000 {
+            panic!("Index must be less than 0x80000000");
+        }
+
         Self(index)
     }
 
@@ -729,16 +744,16 @@ impl HalfspaceContents {
         if self.is_solid() {
             *self = Self::empty()
         } else if self.is_empty() {
-            *self = Self::solid()
+            *self = Self::solid(0)
         }
     }
 
     pub fn is_empty(self) -> bool {
-        self.0 == Self::EMPTY
+        self.0 == 0xFFFFFFFF
     }
 
     pub fn is_solid(self) -> bool {
-        self.0 == Self::SOLID
+        self.0 >= 0x80000000 && !self.is_empty()
     }
 
     pub fn is_index(self) -> bool {
@@ -792,7 +807,7 @@ impl GeometryTree {
         &self.nodes
     }
 
-    pub fn from_cube(size_x: f32, size_y: f32, size_z: f32) -> Self {
+    pub fn from_cube(size_x: f32, size_y: f32, size_z: f32, metadata: u32) -> Self {
         let half_x = size_x / 2.0;
         let half_y = size_y / 2.0;
         let half_z = size_z / 2.0;
@@ -826,7 +841,7 @@ impl GeometryTree {
             Halfspace::new(
                 Plane::new(-Vector3::Z, half_z),
                 HalfspaceContents::empty(),
-                HalfspaceContents::solid(),
+                HalfspaceContents::solid(metadata),
             ),
         ];
 
