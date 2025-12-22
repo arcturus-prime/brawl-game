@@ -1,23 +1,32 @@
-use std::f32::consts::PI;
+use std::{
+    sync::{Arc, Mutex, atomic::AtomicBool},
+    time::Instant,
+};
 
 use shared::{
-    math::{GeometryTree, Quaternion, Transform, Vector3},
-    physics::Moment,
+    math::{GeometryTree, Transform},
+    physics::{Moment, step_world},
     player::PlayerData,
+    tick::Ticker,
     utility::{IdReserver, SparseSet},
 };
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::{self, EventLoop},
-    keyboard::PhysicalKey,
+    event_loop::{self, ControlFlow, EventLoop},
 };
 
-use crate::render::{CameraData, CameraInput, Renderable, Renderer};
+use crate::{
+    input::InputStream,
+    render::{CameraData, Renderable, Renderer},
+};
 
+mod input;
 mod render;
 
-pub struct App {
+pub struct Game {
+    last_update: Instant,
+
     transforms: SparseSet<Transform>,
     players: SparseSet<PlayerData>,
     colliders: SparseSet<GeometryTree>,
@@ -25,79 +34,30 @@ pub struct App {
     cameras: SparseSet<CameraData>,
     renderable: SparseSet<Renderable>,
 
-    renderer: Option<Renderer>,
-    camera_id: usize,
-    object_a: usize,
     reserver: IdReserver,
+    ticker: Ticker,
+
+    camera_id: usize,
+
+    pub input_stream: InputStream,
+    pub renderer: Renderer,
+}
+
+pub struct App {
+    game: Option<Game>,
 }
 
 impl App {
     pub fn new() -> Self {
-        let mut reserver = IdReserver::default();
-        let camera_id = reserver.reserve();
-        let object_a = reserver.reserve();
-
-        let mut cameras = SparseSet::default();
-        cameras.insert(
-            camera_id,
-            CameraData {
-                mode: render::CameraMode::Orbit {
-                    theta: 0.0,
-                    azimuth: 0.0,
-                    distance: 10.0,
-                    target: object_a,
-                },
-                fov_y: 60.0,
-            },
-        );
-
-        let mut transforms = SparseSet::default();
-        transforms.insert(camera_id, Transform::identity());
-        transforms.insert(
-            object_a,
-            Transform::from_position(Vector3::new(0.0, 0.0, -20.0)),
-        );
-
-        let mut colliders = SparseSet::default();
-        colliders.insert(object_a, GeometryTree::from_cube(5.0, 5.0, 5.0, 0));
-
-        let renderable = SparseSet::default();
-        let players = SparseSet::default();
-
-        Self {
-            momenta: SparseSet::default(),
-            renderable,
-
-            cameras,
-            transforms,
-            colliders,
-            players,
-
-            renderer: None,
-
-            object_a,
-            camera_id,
-            reserver,
-        }
+        Self { game: None }
     }
 }
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) {
-        if self.renderer.is_none() {
-            let mut renderer = match Renderer::new(event_loop) {
-                Ok(r) => r,
-                Err(e) => panic!("Failed to create renderer: {}", e),
-            };
-
-            let mut renderable = renderer.create_renderable().unwrap();
-            renderable
-                .set_nodes(&self.colliders[self.object_a])
-                .unwrap();
-
-            self.renderable.insert(self.object_a, renderable);
-
-            self.renderer = Some(renderer);
+        if self.game.is_none() {
+            let renderer = Renderer::new(event_loop).unwrap();
+            self.game = Some(Game::new(renderer));
         }
     }
 
@@ -107,45 +67,79 @@ impl ApplicationHandler for App {
         window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
+        let Some(game) = &mut self.game else { return };
+        game.update();
+
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
             }
             WindowEvent::Resized(_) => {
-                if let Some(ctx) = &mut self.renderer {
-                    ctx.recreate_swapchain()
-                        .expect("Could not recreate swapchain");
-                }
+                game.renderer.set_recreate_swapchain();
             }
             WindowEvent::RedrawRequested => {
-                self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
-
-                if let Some(context) = &mut self.renderer {
-                    if let Err(e) = context.draw_scene(
-                        self.transforms[self.camera_id],
-                        60.0,
-                        &self.renderable,
-                        &self.transforms,
-                    ) {
-                        eprintln!("Render error: {}", e);
-                    }
-                }
+                game.render();
             }
             WindowEvent::KeyboardInput {
                 device_id,
                 event,
                 is_synthetic,
-            } => {
-                if event.physical_key == PhysicalKey::Code(winit::keyboard::KeyCode::ArrowDown) {
-                    self.cameras[self.camera_id].handle_input(CameraInput {
-                        delta_x: 0.001,
-                        delta_y: 0.0,
-                        delta_scroll: 0.0,
-                    });
-                }
-            }
+            } => {}
+            WindowEvent::CursorMoved {
+                device_id,
+                position,
+            } => {}
             _ => {}
         }
+    }
+}
+
+impl Game {
+    pub fn new(renderer: Renderer) -> Self {
+        let mut reserver = IdReserver::default();
+        let camera_id = reserver.reserve();
+
+        let mut cameras = SparseSet::default();
+        cameras.insert(camera_id, CameraData::default());
+
+        let mut transforms = SparseSet::default();
+        transforms.insert(camera_id, Transform::identity());
+
+        Self {
+            last_update: Instant::now(),
+            reserver,
+            camera_id,
+            cameras,
+            transforms,
+            renderable: SparseSet::default(),
+            colliders: SparseSet::default(),
+            players: SparseSet::default(),
+            momenta: SparseSet::default(),
+            renderer,
+            ticker: Ticker::default(),
+            input_stream: InputStream::default(),
+        }
+    }
+
+    pub fn render(&mut self) {
+        self.renderer
+            .draw_scene(
+                self.transforms[self.camera_id],
+                self.cameras[self.camera_id].fov_y,
+                &self.renderable,
+                &self.transforms,
+            )
+            .unwrap();
+    }
+
+    pub fn update(&mut self) {
+        let new_update_time = Instant::now();
+        let dt = (new_update_time - self.last_update).as_secs_f32();
+        self.last_update = new_update_time;
+
+        self.ticker.update(dt, |tick, dt| {
+            step_world(&self.colliders, &mut self.momenta, &mut self.transforms, dt);
+        });
     }
 }
 
@@ -153,5 +147,6 @@ pub fn main() {
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new();
 
+    event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut app).unwrap();
 }

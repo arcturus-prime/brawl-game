@@ -18,7 +18,7 @@ layout(set = 0, binding = 2) uniform readonly ViewData {
 
 #define LEAF 0x80000000
 #define EMPTY 0xFFFFFFFF
-#define MAX_DEPTH 256
+#define MAX_DEPTH 512
 #define RAY_CLIPPING_DISTANCE 1e9
 
 #define STEEL 0x0
@@ -170,7 +170,8 @@ void main() {
         imageStore(img, pixel, vec4(0.0, 0.0, 0.0, 1.0));
         return;
     }
+    vec3 color = stack[stack_pointer].normal * 0.5 + 0.5;
 
-    imageStore(img, pixel, vec4(1.0, 0.0, 0.0, 1.0));
+    imageStore(img, pixel, vec4(color, 1.0));
     imageStore(depth_img, pixel, vec4(depth_current, 0.0, 0.0, 0.0));
 }

@@ -9,7 +9,7 @@ const PLAYER_ACCELERATION: f32 = 0.1;
 const PLAYER_MAX_SPEED: f32 = 100.0;
 
 #[derive(Default, Clone)]
-pub struct InputState {
+pub struct PlayerInputState {
     pub want_direction: Vector3,
     pub look_direction: Vector3,
     pub throttle: f32,
@@ -18,7 +18,7 @@ pub struct InputState {
 #[derive(Default)]
 pub struct PlayerData {
     pub health: f32,
-    pub input_history: BTreeMap<u32, InputState>,
+    pub input_history: BTreeMap<u32, PlayerInputState>,
 }
 
 impl PlayerData {
@@ -47,7 +47,7 @@ impl PlayerData {
         self.input_history.remove(&tick);
     }
 
-    pub fn set_input(&mut self, tick: u32, input: InputState) {
+    pub fn set_input(&mut self, tick: u32, input: PlayerInputState) {
         self.input_history.insert(tick, input);
     }
 }

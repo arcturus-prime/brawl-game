@@ -47,9 +47,24 @@ pub enum CameraMode {
     Fixed,
 }
 
+impl Default for CameraMode {
+    fn default() -> Self {
+        Self::Fixed
+    }
+}
+
 pub struct CameraData {
     pub mode: CameraMode,
     pub fov_y: f32,
+}
+
+impl Default for CameraData {
+    fn default() -> Self {
+        Self {
+            mode: Default::default(),
+            fov_y: 60.0,
+        }
+    }
 }
 
 pub struct CameraInput {
@@ -59,13 +74,6 @@ pub struct CameraInput {
 }
 
 impl CameraData {
-    pub fn new() -> Self {
-        Self {
-            mode: CameraMode::Fixed,
-            fov_y: 60.0,
-        }
-    }
-
     pub fn handle_input(&mut self, input: CameraInput) {
         if let CameraMode::Orbit {
             theta,
@@ -291,6 +299,7 @@ impl Renderable {
 }
 
 pub struct Renderer {
+    should_recreate_swapchain: bool,
     camera: Subbuffer<compute_shader::ViewData>,
     depth_buffer: Arc<ImageView>,
 
@@ -394,6 +403,7 @@ impl Renderer {
         let depth_buffer = ImageView::new_default(image)?;
 
         Ok(Self {
+            should_recreate_swapchain: false,
             depth_buffer,
             camera,
             memory_allocator,
@@ -503,6 +513,10 @@ impl Renderer {
         renderables: &SparseSet<Renderable>,
         tranforms: &SparseSet<Transform>,
     ) -> Result<(), Box<dyn Error>> {
+        if self.should_recreate_swapchain {
+            self.recreate_swapchain()?;
+        }
+
         self.frame_sync.wait_for_previous();
         self.set_camera(camera, fov)?;
 
@@ -530,13 +544,13 @@ impl Renderer {
         {
             Ok((index, suboptimal, future)) => {
                 if suboptimal {
-                    self.recreate_swapchain()?;
+                    self.should_recreate_swapchain = true
                 }
 
                 Ok(Some((index, future.boxed())))
             }
             Err(VulkanError::OutOfDate) => {
-                self.recreate_swapchain()?;
+                self.should_recreate_swapchain = true;
 
                 Ok(None)
             }
@@ -603,7 +617,7 @@ impl Renderer {
                 Ok(())
             }
             Err(VulkanError::OutOfDate) => {
-                self.recreate_swapchain()?;
+                self.should_recreate_swapchain = true;
                 self.frame_sync.handle_error(self.device.clone());
                 Ok(())
             }
@@ -614,7 +628,7 @@ impl Renderer {
         }
     }
 
-    pub fn recreate_swapchain(&mut self) -> Result<(), Box<dyn Error>> {
+    fn recreate_swapchain(&mut self) -> Result<(), Box<dyn Error>> {
         self.swapchain_manager.recreate(&self.window)?;
         self.depth_buffer = ImageView::new_default(Image::new(
             self.memory_allocator.clone(),
@@ -640,7 +654,13 @@ impl Renderer {
         camera_writer.resolution_x = self.window.inner_size().width;
         camera_writer.resolution_y = Padded::from(self.window.inner_size().height);
 
+        self.should_recreate_swapchain = false;
+
         Ok(())
+    }
+
+    pub fn set_recreate_swapchain(&mut self) {
+        self.should_recreate_swapchain = true
     }
 
     fn create_instance(
