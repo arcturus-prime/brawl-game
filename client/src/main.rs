@@ -4,9 +4,9 @@ use std::{
 };
 
 use shared::{
-    math::{GeometryTree, Transform},
+    math::{GeometryTree, Transform, Vector3},
     physics::{Moment, step_world},
-    player::PlayerData,
+    player::{PlayerData, PlayerInputState},
     tick::Ticker,
     utility::{IdReserver, SparseSet},
 };
@@ -14,14 +14,12 @@ use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
     event_loop::{self, ControlFlow, EventLoop},
+    keyboard::KeyCode,
 };
+use winit_input_helper::WinitInputHelper;
 
-use crate::{
-    input::InputStream,
-    render::{CameraData, Renderable, Renderer},
-};
+use crate::render::{CameraData, CameraInput, CameraMode, Renderable, Renderer};
 
-mod input;
 mod render;
 
 pub struct Game {
@@ -38,8 +36,9 @@ pub struct Game {
     ticker: Ticker,
 
     camera_id: usize,
+    local_player_id: usize,
 
-    pub input_stream: InputStream,
+    pub input: WinitInputHelper,
     pub renderer: Renderer,
 }
 
@@ -61,6 +60,30 @@ impl ApplicationHandler for App {
         }
     }
 
+    fn device_event(
+        &mut self,
+        event_loop: &event_loop::ActiveEventLoop,
+        device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        let Some(game) = &mut self.game else { return };
+        game.input.process_device_event(&event);
+    }
+
+    fn about_to_wait(&mut self, event_loop: &event_loop::ActiveEventLoop) {
+        let Some(game) = &mut self.game else { return };
+        game.input.end_step();
+    }
+
+    fn new_events(
+        &mut self,
+        event_loop: &event_loop::ActiveEventLoop,
+        cause: winit::event::StartCause,
+    ) {
+        let Some(game) = &mut self.game else { return };
+        game.input.step();
+    }
+
     fn window_event(
         &mut self,
         event_loop: &event_loop::ActiveEventLoop,
@@ -68,6 +91,8 @@ impl ApplicationHandler for App {
         event: winit::event::WindowEvent,
     ) {
         let Some(game) = &mut self.game else { return };
+
+        game.input.process_window_event(&event);
         game.update();
 
         match event {
@@ -80,15 +105,6 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 game.render();
             }
-            WindowEvent::KeyboardInput {
-                device_id,
-                event,
-                is_synthetic,
-            } => {}
-            WindowEvent::CursorMoved {
-                device_id,
-                position,
-            } => {}
             _ => {}
         }
     }
@@ -105,10 +121,11 @@ impl Game {
         let mut transforms = SparseSet::default();
         transforms.insert(camera_id, Transform::identity());
 
-        Self {
+        let mut s = Self {
             last_update: Instant::now(),
             reserver,
             camera_id,
+            local_player_id: usize::MAX,
             cameras,
             transforms,
             renderable: SparseSet::default(),
@@ -117,11 +134,62 @@ impl Game {
             momenta: SparseSet::default(),
             renderer,
             ticker: Ticker::default(),
-            input_stream: InputStream::default(),
-        }
+            input: WinitInputHelper::new(),
+        };
+
+        s.temp_create_local_player();
+        s.temp_add_object_static();
+
+        s
+    }
+
+    fn temp_create_local_player(&mut self) {
+        let id = self.reserver.reserve();
+
+        self.transforms.insert(id, Transform::identity());
+        self.momenta.insert(id, Moment::new(5.0));
+        self.players.insert(id, PlayerData::default());
+
+        let mut collider = GeometryTree::from_cube(2.0, 2.0, 2.0, 0);
+        let mut hole = GeometryTree::from_cube(1.0, 1.0, 3.0, 0);
+        hole.invert();
+        collider.intersection(hole);
+
+        let mut renderable = self.renderer.create_renderable().unwrap();
+        renderable.set_nodes(&collider).unwrap();
+
+        self.renderable.insert(id, renderable);
+        self.colliders.insert(id, collider);
+
+        self.cameras[self.camera_id].mode = CameraMode::Orbit {
+            theta: 0.0,
+            azimuth: 0.0,
+            distance: 10.0,
+            target: id,
+        };
+
+        self.local_player_id = id;
+    }
+
+    fn temp_add_object_static(&mut self) {
+        let id = self.reserver.reserve();
+
+        let mut collider = GeometryTree::from_cube(10.0, 10.0, 10.0, 0);
+        let mut hole = GeometryTree::from_cube(17.5, 17.5, 7.5, 0);
+        hole.invert();
+        collider.intersection(hole);
+
+        let mut renderable = self.renderer.create_renderable().unwrap();
+        renderable.set_nodes(&collider).unwrap();
+
+        self.colliders.insert(id, collider);
+        self.renderable.insert(id, renderable);
+        self.transforms
+            .insert(id, Transform::from_position(Vector3::X * 20.0));
     }
 
     pub fn render(&mut self) {
+        self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
         self.renderer
             .draw_scene(
                 self.transforms[self.camera_id],
@@ -138,6 +206,52 @@ impl Game {
         self.last_update = new_update_time;
 
         self.ticker.update(dt, |tick, dt| {
+            let dampening = 0.01;
+
+            self.cameras[self.camera_id].handle_input(CameraInput {
+                delta_x: self.input.mouse_diff().0 * dampening,
+                delta_y: self.input.mouse_diff().1 * dampening,
+                delta_scroll: self.input.scroll_diff().1,
+            });
+
+            if let Some(player) = self.players.get_mut(self.local_player_id) {
+                let camera_tranform = self.transforms[self.camera_id];
+                let mut move_direction = Vector3::zero();
+
+                if self.input.key_held(KeyCode::KeyW) {
+                    move_direction += Vector3::X;
+                }
+
+                if self.input.key_held(KeyCode::KeyS) {
+                    move_direction -= Vector3::X;
+                }
+
+                if self.input.key_held(KeyCode::KeyA) {
+                    move_direction -= Vector3::Y;
+                }
+
+                if self.input.key_held(KeyCode::KeyD) {
+                    move_direction += Vector3::Y;
+                }
+
+                player.set_input(
+                    tick,
+                    PlayerInputState {
+                        want_direction: camera_tranform.rotate_vector(move_direction),
+                        look_direction: camera_tranform.rotate_vector(Vector3::X),
+                        throttle: 1.0,
+                    },
+                );
+
+                player
+                    .apply_input(
+                        tick,
+                        &mut self.momenta[self.local_player_id],
+                        &mut self.transforms[self.local_player_id],
+                    )
+                    .unwrap();
+            }
+
             step_world(&self.colliders, &mut self.momenta, &mut self.transforms, dt);
         });
     }

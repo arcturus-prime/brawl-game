@@ -192,7 +192,9 @@ impl SwapchainManager {
                 min_image_count: capabilities.min_image_count.max(2),
                 image_format,
                 image_extent: window_size.into(),
-                image_usage: ImageUsage::STORAGE | ImageUsage::COLOR_ATTACHMENT,
+                image_usage: ImageUsage::STORAGE
+                    | ImageUsage::COLOR_ATTACHMENT
+                    | ImageUsage::TRANSFER_DST,
                 composite_alpha,
                 ..Default::default()
             },
@@ -455,6 +457,7 @@ impl Renderer {
 
     fn begin_frame(
         &self,
+        image_index: u32,
     ) -> Result<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, Box<dyn Error>> {
         let mut builder = AutoCommandBufferBuilder::primary(
             self.command_buffer_allocator.clone(),
@@ -465,6 +468,13 @@ impl Renderer {
         builder.clear_color_image(ClearColorImageInfo {
             clear_value: ClearColorValue::Float([1e30, 0.0, 0.0, 0.0]),
             ..ClearColorImageInfo::image(self.depth_buffer.image().clone())
+        })?;
+
+        builder.clear_color_image(ClearColorImageInfo {
+            clear_value: ClearColorValue::Float([0.0, 0.0, 0.0, 0.0]),
+            ..ClearColorImageInfo::image(
+                self.swapchain_manager.images[image_index as usize].clone(),
+            )
         })?;
 
         Ok(builder)
@@ -525,7 +535,7 @@ impl Renderer {
             None => return Ok(()),
         };
 
-        let mut builder = self.begin_frame()?;
+        let mut builder = self.begin_frame(image_index)?;
         for (id, renderable) in renderables.iter() {
             self.draw_renderable(&mut builder, renderable, &tranforms[*id], image_index)?;
         }

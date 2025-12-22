@@ -92,10 +92,11 @@ pub fn step_world(
         let mass = momenta[id_a].mass;
 
         let velocity_along = collision.normal.dot(velocity);
-        let impulse = collision.normal * -(1.0 + COLLISION_RESTITUTION) * velocity_along / mass;
+        let impulse = collision.normal * -(1.0 + COLLISION_RESTITUTION) * velocity_along
+            / (1.0 / mass + 1.0 / 500.0);
 
         momenta[id_a].apply_impulse(impulse);
-        transforms[id_a].position = collision.position + momenta[id_a].velocity * dt;
+        transforms[id_a].position = collision.position + collision.normal * 0.01;
         momenta[id_a].velocity *= LINEAR_DAMPENING;
     }
 

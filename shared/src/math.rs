@@ -801,8 +801,6 @@ pub struct GeometryTree {
 }
 
 impl GeometryTree {
-    pub const COLLISION_SKIN_OFFSET: f32 = 1e-2;
-
     pub fn nodes(&self) -> &[Halfspace] {
         &self.nodes
     }
@@ -975,7 +973,9 @@ impl GeometryTree {
 
             let mut node = self.nodes[contents.get_index().unwrap() as usize].clone();
 
-            node.plane.distance += radius;
+            if node.plane.normal.dot(dir) < 0.0 {
+                node.plane.distance += radius;
+            }
 
             let start_dist = node.plane.distance_to_point(origin + dir * t_min);
             let end_dist = node.plane.distance_to_point(origin + dir * t_max);

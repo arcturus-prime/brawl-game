@@ -166,10 +166,10 @@ void main() {
     float depth_previous = imageLoad(depth_img, pixel).r;
     float depth_current = stack[stack_pointer].t_min;
 
-    if (depth_current > depth_previous || hit == 0) {
-        imageStore(img, pixel, vec4(0.0, 0.0, 0.0, 1.0));
+    if (hit == 0 || depth_current > depth_previous) {
         return;
     }
+
     vec3 color = stack[stack_pointer].normal * 0.5 + 0.5;
 
     imageStore(img, pixel, vec4(color, 1.0));
