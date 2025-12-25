@@ -1,5 +1,6 @@
 use std::{
     f32::EPSILON,
+    f64::INFINITY,
     ops::{
         Add, AddAssign, ControlFlow, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub,
         SubAssign,
@@ -1237,6 +1238,9 @@ impl GeometryTree {
             return None;
         }
 
+        let intersection = self.bounds.intersection(&bounds);
+        let starting_point = (intersection.max + intersection.min) / 2.0;
+
         enum Command {
             PopContraint,
             PushContraint(Plane3, bool),
@@ -1258,7 +1262,8 @@ impl GeometryTree {
                 }
                 Command::ProcessNode(contents, is_second_tree) => {
                     if contents.is_solid() && is_second_tree {
-                        if let Some(hit) = Self::solve_constraints(&path, transform, displacement)
+                        if let Some(hit) =
+                            Self::solve_spacetime_constraints(&path, starting_point, displacement)
                             && best_hit.map_or(true, |h| hit.t < h.t)
                         {
                             best_hit = Some(hit)
@@ -1311,20 +1316,17 @@ impl GeometryTree {
         best_hit
     }
 
+    // TODO(arcprime): this needs some serious numerical robustness work
+
     pub const MAX_TREECAST_ITERATIONS: usize = 30;
     pub const SLOP_TREECAST_EPSILON: f32 = 1e-5;
 
-    fn solve_constraints(
+    fn solve_spacetime_constraints(
         constraints: &[(Plane3, bool)],
-        transform: Transform3,
+        starting_point: Vector3,
         displacement: Vector3,
     ) -> Option<RaycastData> {
-        let mut x = Vector4::new(
-            transform.position.x,
-            transform.position.y,
-            transform.position.z,
-            0.0,
-        );
+        let mut x = Vector4::new(starting_point.x, starting_point.y, starting_point.z, 0.0);
 
         let mut solved = false;
 
@@ -1332,16 +1334,21 @@ impl GeometryTree {
             let mut most_violated_spacetime_plane = None;
 
             for (plane, is_dynamic) in constraints {
-                let ndotv = plane.normal.dot(displacement);
+                let normal_dot_displacement = plane.normal.dot(displacement);
 
                 let normal = if *is_dynamic {
-                    if ndotv < -1e-4 {
+                    if normal_dot_displacement < -1e-4 {
                         continue;
                     }
 
-                    Vector4::new(plane.normal.x, plane.normal.y, plane.normal.z, -ndotv)
+                    Vector4::new(
+                        plane.normal.x,
+                        plane.normal.y,
+                        plane.normal.z,
+                        -normal_dot_displacement,
+                    )
                 } else {
-                    if ndotv > 1e-4 {
+                    if normal_dot_displacement > 1e-4 {
                         continue;
                     }
 
@@ -1365,7 +1372,7 @@ impl GeometryTree {
             if let Some((normal, distance)) = most_violated_spacetime_plane {
                 let len_sq = normal.length_squared();
 
-                x = x - normal * distance / len_sq;
+                x = x - normal * distance / len_sq * 1.1;
 
                 if x.w < 0.0 {
                     x.w = 0.0;

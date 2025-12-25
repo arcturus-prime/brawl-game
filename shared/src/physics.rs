@@ -94,7 +94,7 @@ pub fn step_world(
 
         let velocity_along = collision.normal.dot(velocity);
         let impulse = collision.normal * -(1.0 + COLLISION_RESTITUTION) * velocity_along
-            / (1.0 / mass + 1.0 / 500.0);
+            / (1.0 / mass + 1.0 / 50.0);
 
         momenta[id_a].apply_impulse(impulse);
 
