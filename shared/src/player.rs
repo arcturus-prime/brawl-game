@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    math::{Quaternion, Transform, Vector3},
+    math::{Quaternion, Transform3, Vector3},
     physics::Moment,
 };
 
@@ -26,7 +26,7 @@ impl PlayerData {
         &mut self,
         tick: u32,
         moment: &mut Moment,
-        transform: &mut Transform,
+        transform: &mut Transform3,
     ) -> Result<(), ()> {
         let inputs = self.input_history.get_mut(&tick).ok_or(())?;
 

@@ -1,9 +1,9 @@
 use crate::{
-    math::{GeometryTree, SpherecastData, Transform, Vector3},
+    math::{GeometryTree, RaycastData, Transform3, Vector3},
     utility::SparseSet,
 };
 
-pub const COLLISION_RESTITUTION: f32 = 0.5;
+pub const COLLISION_RESTITUTION: f32 = 1.0;
 pub const LINEAR_DAMPENING: f32 = 0.99;
 
 pub struct Moment {
@@ -19,7 +19,7 @@ impl Moment {
         }
     }
 
-    pub fn update(&mut self, body: &mut Transform, dt: f32) {
+    pub fn update(&mut self, body: &mut Transform3, dt: f32) {
         body.position += self.velocity * dt;
     }
 
@@ -31,7 +31,7 @@ impl Moment {
 pub fn step_world(
     colliders: &SparseSet<GeometryTree>,
     momenta: &mut SparseSet<Moment>,
-    transforms: &mut SparseSet<Transform>,
+    transforms: &mut SparseSet<Transform3>,
     dt: f32,
 ) {
     let mut colliding = vec![];
@@ -44,7 +44,7 @@ pub fn step_world(
             continue;
         };
 
-        let mut earliest_collision: Option<(SpherecastData, usize)> = None;
+        let mut earliest_collision: Option<(RaycastData, usize)> = None;
 
         for (id_b, body_b) in colliders.iter() {
             if id_a == id_b {
@@ -59,12 +59,11 @@ pub fn step_world(
 
             let b_inverse = transforms[*id_b].inverse();
 
-            let position = b_inverse.transform_vector(transforms[*id_a].position);
-            let velocity = b_inverse.rotate_vector(world_velocity);
-
-            let Some(mut collision) =
-                body_b.spherecast(collider.get_bounds_radius(), position, velocity * dt)
-            else {
+            let Some(mut collision) = body_b.treecast(
+                collider,
+                b_inverse * transforms[*id_a],
+                b_inverse.rotate_vector(world_velocity * dt),
+            ) else {
                 continue;
             };
 
@@ -91,12 +90,17 @@ pub fn step_world(
         let velocity = momenta[id_a].velocity;
         let mass = momenta[id_a].mass;
 
+        transforms[id_a].position += velocity * dt * (collision.t - 1e-2).min(0.0);
+
         let velocity_along = collision.normal.dot(velocity);
         let impulse = collision.normal * -(1.0 + COLLISION_RESTITUTION) * velocity_along
             / (1.0 / mass + 1.0 / 500.0);
 
         momenta[id_a].apply_impulse(impulse);
-        transforms[id_a].position = collision.position + collision.normal * 0.01;
+
+        let t_remaining = (1.0 - collision.t + 1e-2).max(0.0);
+
+        transforms[id_a].position += velocity * dt * t_remaining;
         momenta[id_a].velocity *= LINEAR_DAMPENING;
     }
 

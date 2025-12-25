@@ -12,7 +12,7 @@ impl Default for Ticker {
         Self {
             tick: 0,
             warp: 0.0,
-            step_size: 1.0 / 120.0,
+            step_size: 1.0 / 60.0,
             accumulator: 0.0,
         }
     }

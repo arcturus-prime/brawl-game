@@ -1,10 +1,7 @@
-use std::{
-    sync::{Arc, Mutex, atomic::AtomicBool},
-    time::Instant,
-};
+use std::time::Instant;
 
 use shared::{
-    math::{GeometryTree, Transform, Vector3},
+    math::{GeometryTree, Transform3, Vector3},
     physics::{Moment, step_world},
     player::{PlayerData, PlayerInputState},
     tick::Ticker,
@@ -25,7 +22,7 @@ mod render;
 pub struct Game {
     last_update: Instant,
 
-    transforms: SparseSet<Transform>,
+    transforms: SparseSet<Transform3>,
     players: SparseSet<PlayerData>,
     colliders: SparseSet<GeometryTree>,
     momenta: SparseSet<Moment>,
@@ -119,7 +116,7 @@ impl Game {
         cameras.insert(camera_id, CameraData::default());
 
         let mut transforms = SparseSet::default();
-        transforms.insert(camera_id, Transform::identity());
+        transforms.insert(camera_id, Transform3::identity());
 
         let mut s = Self {
             last_update: Instant::now(),
@@ -146,12 +143,12 @@ impl Game {
     fn temp_create_local_player(&mut self) {
         let id = self.reserver.reserve();
 
-        self.transforms.insert(id, Transform::identity());
+        self.transforms.insert(id, Transform3::identity());
         self.momenta.insert(id, Moment::new(5.0));
         self.players.insert(id, PlayerData::default());
 
-        let mut collider = GeometryTree::from_cube(2.0, 2.0, 2.0, 0);
-        let mut hole = GeometryTree::from_cube(1.0, 1.0, 3.0, 0);
+        let mut collider = GeometryTree::from_cube(2.0, 2.0, 2.0, 1);
+        let mut hole = GeometryTree::from_cube(1.0, 1.0, 3.0, 1);
         hole.invert();
         collider.intersection(hole);
 
@@ -174,8 +171,14 @@ impl Game {
     fn temp_add_object_static(&mut self) {
         let id = self.reserver.reserve();
 
-        let mut collider = GeometryTree::from_cube(10.0, 10.0, 10.0, 0);
-        let mut hole = GeometryTree::from_cube(17.5, 17.5, 7.5, 0);
+        let mut collider = GeometryTree::from_cube(10.0, 10.0, 10.0, 1);
+        let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
+        hole.transform(Transform3::from_position(Vector3::Y * 5.0));
+        hole.invert();
+        collider.intersection(hole);
+
+        let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
+        hole.transform(Transform3::from_position(Vector3::Y * -4.0));
         hole.invert();
         collider.intersection(hole);
 
@@ -185,11 +188,10 @@ impl Game {
         self.colliders.insert(id, collider);
         self.renderable.insert(id, renderable);
         self.transforms
-            .insert(id, Transform::from_position(Vector3::X * 20.0));
+            .insert(id, Transform3::from_position(Vector3::X * 20.0));
     }
 
     pub fn render(&mut self) {
-        self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
         self.renderer
             .draw_scene(
                 self.transforms[self.camera_id],
@@ -213,6 +215,8 @@ impl Game {
                 delta_y: self.input.mouse_diff().1 * dampening,
                 delta_scroll: self.input.scroll_diff().1,
             });
+
+            self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
 
             if let Some(player) = self.players.get_mut(self.local_player_id) {
                 let camera_tranform = self.transforms[self.camera_id];

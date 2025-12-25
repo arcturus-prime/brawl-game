@@ -1,7 +1,7 @@
 // render.rs - Cleaner, more modular version
 
 use shared::{
-    math::{GeometryTree, Quaternion, Transform, Vector3},
+    math::{GeometryTree, Quaternion, Transform3, Vector3},
     utility::SparseSet,
 };
 use std::{error::Error, sync::Arc};
@@ -88,7 +88,7 @@ impl CameraData {
         }
     }
 
-    pub fn update_tranform(&self, transforms: &mut SparseSet<Transform>, id: usize) {
+    pub fn update_tranform(&self, transforms: &mut SparseSet<Transform3>, id: usize) {
         match self.mode {
             CameraMode::Orbit {
                 theta,
@@ -441,7 +441,7 @@ impl Renderer {
         Ok(Renderable { geometry })
     }
 
-    fn set_camera(&mut self, transform: Transform, fov: f32) -> Result<(), Box<dyn Error>> {
+    fn set_camera(&mut self, transform: Transform3, fov: f32) -> Result<(), Box<dyn Error>> {
         let mut writer = self.camera.write()?;
 
         let position = transform.position;
@@ -484,7 +484,7 @@ impl Renderer {
         &self,
         builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
         renderable: &Renderable,
-        transform: &Transform,
+        transform: &Transform3,
         image_index: u32,
     ) -> Result<&'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, Box<dyn Error>> {
         let descriptor_set = self.create_descriptor_set(image_index, renderable)?;
@@ -518,16 +518,17 @@ impl Renderer {
 
     pub fn draw_scene(
         &mut self,
-        camera: Transform,
+        camera: Transform3,
         fov: f32,
         renderables: &SparseSet<Renderable>,
-        tranforms: &SparseSet<Transform>,
+        tranforms: &SparseSet<Transform3>,
     ) -> Result<(), Box<dyn Error>> {
+        self.frame_sync.wait_for_previous();
+
         if self.should_recreate_swapchain {
             self.recreate_swapchain()?;
         }
 
-        self.frame_sync.wait_for_previous();
         self.set_camera(camera, fov)?;
 
         let (image_index, future) = match self.acquire_image()? {

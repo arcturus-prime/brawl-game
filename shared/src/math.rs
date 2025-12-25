@@ -1,6 +1,9 @@
 use std::{
     f32::EPSILON,
-    ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
+    ops::{
+        Add, AddAssign, ControlFlow, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub,
+        SubAssign,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -150,6 +153,144 @@ impl Neg for Vector3 {
     type Output = Vector3;
     fn neg(self) -> Vector3 {
         Vector3::new(-self.x, -self.y, -self.z)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Vector4 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
+
+impl Vector4 {
+    pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
+        Vector4 { x, y, z, w }
+    }
+
+    pub fn zero() -> Self {
+        Vector4::new(0.0, 0.0, 0.0, 0.0)
+    }
+
+    pub fn one() -> Self {
+        Vector4::new(1.0, 1.0, 1.0, 1.0)
+    }
+
+    pub fn dot(self, other: Vector4) -> f32 {
+        self.x * other.x + self.y * other.y + self.z * other.z + self.w * other.w
+    }
+
+    pub fn length(self) -> f32 {
+        self.length_squared().sqrt()
+    }
+
+    pub fn length_squared(self) -> f32 {
+        self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w
+    }
+
+    pub fn normalize(self) -> Vector4 {
+        let len = self.length();
+        if len > EPSILON {
+            self / len
+        } else {
+            Vector4::zero()
+        }
+    }
+
+    pub fn lerp(self, other: Vector4, t: f32) -> Vector4 {
+        self + (other - self) * t
+    }
+}
+
+impl Add for Vector4 {
+    type Output = Vector4;
+    fn add(self, other: Vector4) -> Vector4 {
+        Vector4::new(
+            self.x + other.x,
+            self.y + other.y,
+            self.z + other.z,
+            self.w + other.w,
+        )
+    }
+}
+
+impl AddAssign for Vector4 {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub for Vector4 {
+    type Output = Vector4;
+    fn sub(self, other: Vector4) -> Vector4 {
+        Vector4::new(
+            self.x - other.x,
+            self.y - other.y,
+            self.z - other.z,
+            self.w - other.w,
+        )
+    }
+}
+
+impl SubAssign for Vector4 {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl Mul<f32> for Vector4 {
+    type Output = Vector4;
+    fn mul(self, scalar: f32) -> Vector4 {
+        Vector4::new(
+            self.x * scalar,
+            self.y * scalar,
+            self.z * scalar,
+            self.w * scalar,
+        )
+    }
+}
+
+impl MulAssign<f32> for Vector4 {
+    fn mul_assign(&mut self, rhs: f32) {
+        *self = *self * rhs
+    }
+}
+
+impl Mul<Vector4> for f32 {
+    type Output = Vector4;
+    fn mul(self, vector: Vector4) -> Vector4 {
+        Vector4::new(
+            vector.x * self,
+            vector.y * self,
+            vector.z * self,
+            vector.w * self,
+        )
+    }
+}
+
+impl Div<f32> for Vector4 {
+    type Output = Vector4;
+    fn div(self, scalar: f32) -> Vector4 {
+        Vector4::new(
+            self.x / scalar,
+            self.y / scalar,
+            self.z / scalar,
+            self.w / scalar,
+        )
+    }
+}
+
+impl DivAssign<f32> for Vector4 {
+    fn div_assign(&mut self, rhs: f32) {
+        *self = *self / rhs;
+    }
+}
+
+impl Neg for Vector4 {
+    type Output = Vector4;
+    fn neg(self) -> Vector4 {
+        Vector4::new(-self.x, -self.y, -self.z, -self.w)
     }
 }
 
@@ -496,18 +637,23 @@ impl IndexMut<usize> for Quaternion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Plane {
+pub struct Plane3 {
     pub normal: Vector3,
     pub distance: f32,
 }
 
-impl Plane {
-    pub fn new(normal: Vector3, distance: f32) -> Self {
-        let normalized = normal.normalize();
+#[derive(PartialEq)]
+pub enum PlaneSide {
+    Positive,
+    Negative,
+    Both,
+}
 
-        Plane {
-            normal: normalized,
-            distance,
+impl Plane3 {
+    pub fn new(normal: Vector3, distance: f32) -> Self {
+        Plane3 {
+            normal: normal.normalize(),
+            distance: distance / normal.length(),
         }
     }
 
@@ -515,7 +661,7 @@ impl Plane {
         let normalized = normal.normalize();
         let distance = normalized.dot(point);
 
-        Plane {
+        Plane3 {
             normal: normalized,
             distance,
         }
@@ -528,7 +674,7 @@ impl Plane {
         let normal = v1.cross(v2).normalize();
         let distance = normal.dot(p1);
 
-        Plane { normal, distance }
+        Plane3 { normal, distance }
     }
 
     pub fn distance_to_point(self, point: Vector3) -> f32 {
@@ -556,26 +702,45 @@ impl Plane {
         }
     }
 
-    pub fn flip(self) -> Plane {
-        Plane {
+    pub fn flip(self) -> Plane3 {
+        Plane3 {
             normal: -self.normal,
             distance: -self.distance,
         }
     }
+
+    pub fn classify_aabb(&self, aabb: &BoundingBox3) -> PlaneSide {
+        let center = (aabb.min + aabb.max) * 0.5;
+        let extents = (aabb.max - aabb.min) * 0.5;
+
+        let r = extents.x * self.normal.x.abs()
+            + extents.y * self.normal.y.abs()
+            + extents.z * self.normal.z.abs();
+
+        let distance_to_center = self.distance_to_point(center);
+
+        if distance_to_center > r {
+            PlaneSide::Positive
+        } else if distance_to_center < -r {
+            PlaneSide::Negative
+        } else {
+            PlaneSide::Both
+        }
+    }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct BoundingBox {
+#[derive(Clone, Debug)]
+pub struct BoundingBox3 {
     pub min: Vector3,
     pub max: Vector3,
 }
 
-impl BoundingBox {
+impl BoundingBox3 {
     pub fn new(min: Vector3, max: Vector3) -> Self {
-        BoundingBox { min, max }
+        BoundingBox3 { min, max }
     }
 
-    pub fn contains(&self, other: &BoundingBox) -> bool {
+    pub fn contains(&self, other: &BoundingBox3) -> bool {
         self.min.x <= other.min.x
             && self.min.y <= other.min.y
             && self.min.z <= other.min.z
@@ -584,18 +749,18 @@ impl BoundingBox {
             && self.max.z >= other.max.z
     }
 
-    pub fn intersects(&self, other: &BoundingBox) -> bool {
+    pub fn intersects(&self, other: &BoundingBox3) -> bool {
         (self.min.x <= other.max.x && self.max.x >= other.min.x)
             && (self.min.y <= other.max.y && self.max.y >= other.min.y)
             && (self.min.z <= other.max.z && self.max.z >= other.min.z)
     }
 
-    pub fn intersection(self, other: BoundingBox) -> BoundingBox {
+    pub fn intersection(&self, other: &BoundingBox3) -> BoundingBox3 {
         if !self.intersects(&other) {
-            return BoundingBox::new(Vector3::zero(), Vector3::zero());
+            return BoundingBox3::new(Vector3::zero(), Vector3::zero());
         }
 
-        BoundingBox::new(
+        BoundingBox3::new(
             Vector3::new(
                 self.min.x.max(other.min.x),
                 self.min.y.max(other.min.y),
@@ -609,7 +774,7 @@ impl BoundingBox {
         )
     }
 
-    pub fn union(self, other: BoundingBox) -> BoundingBox {
+    pub fn union(&self, other: &BoundingBox3) -> BoundingBox3 {
         Self::new(
             Vector3::new(
                 self.min.x.min(other.min.x),
@@ -626,32 +791,32 @@ impl BoundingBox {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Transform {
+pub struct Transform3 {
     pub position: Vector3,
     pub rotation: Quaternion,
 }
 
-impl Transform {
+impl Transform3 {
     pub fn new(position: Vector3, rotation: Quaternion) -> Self {
-        Transform { position, rotation }
+        Transform3 { position, rotation }
     }
 
     pub fn identity() -> Self {
-        Transform {
+        Transform3 {
             position: Vector3::zero(),
             rotation: Quaternion::identity(),
         }
     }
 
     pub fn from_position(position: Vector3) -> Self {
-        Transform {
+        Transform3 {
             position,
             rotation: Quaternion::identity(),
         }
     }
 
     pub fn from_rotation(rotation: Quaternion) -> Self {
-        Transform {
+        Transform3 {
             position: Vector3::zero(),
             rotation,
         }
@@ -665,55 +830,62 @@ impl Transform {
         self.rotation.rotate_vector(point)
     }
 
-    pub fn inverse(self) -> Transform {
+    pub fn inverse(self) -> Transform3 {
         let inv_rotation = self.rotation.inverse();
         let inv_position = inv_rotation.rotate_vector(-self.position);
 
-        Transform {
+        Transform3 {
             position: inv_position,
             rotation: inv_rotation,
         }
     }
 
-    pub fn combine(self, other: Transform) -> Transform {
-        Transform {
+    pub fn combine(self, other: Transform3) -> Transform3 {
+        Transform3 {
             position: self.transform_vector(other.position),
             rotation: self.rotation * other.rotation,
         }
     }
 
-    pub fn lerp(self, other: Transform, t: f32) -> Transform {
-        Transform {
+    pub fn lerp(self, other: Transform3, t: f32) -> Transform3 {
+        Transform3 {
             position: self.position.lerp(other.position, t),
             rotation: self.rotation.slerp(other.rotation, t),
         }
     }
 }
 
-impl Default for Transform {
+impl Default for Transform3 {
     fn default() -> Self {
         Self::identity()
     }
 }
 
-impl Mul for Transform {
-    type Output = Transform;
-    fn mul(self, other: Transform) -> Transform {
+impl Mul for Transform3 {
+    type Output = Transform3;
+    fn mul(self, other: Transform3) -> Transform3 {
         self.combine(other)
     }
 }
 
-impl MulAssign for Transform {
+impl MulAssign for Transform3 {
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-#[derive(Clone)]
-pub struct SpherecastData {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RaycastData {
     pub position: Vector3,
     pub normal: Vector3,
     pub t: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ContactData {
+    pub point: Vector3,
+    pub normal: Vector3,
+    pub penetration: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -771,13 +943,13 @@ impl HalfspaceContents {
 
 #[derive(Clone)]
 pub struct Halfspace {
-    pub plane: Plane,
+    pub plane: Plane3,
     pub negative: HalfspaceContents,
     pub positive: HalfspaceContents,
 }
 
 impl Halfspace {
-    pub fn new(plane: Plane, positive: HalfspaceContents, negative: HalfspaceContents) -> Self {
+    pub fn new(plane: Plane3, positive: HalfspaceContents, negative: HalfspaceContents) -> Self {
         Self {
             plane,
             positive,
@@ -797,7 +969,7 @@ impl Halfspace {
 #[derive(Clone)]
 pub struct GeometryTree {
     nodes: Vec<Halfspace>,
-    bounds: BoundingBox,
+    bounds: BoundingBox3,
 }
 
 impl GeometryTree {
@@ -812,38 +984,38 @@ impl GeometryTree {
 
         let nodes = vec![
             Halfspace::new(
-                Plane::new(Vector3::X, half_x),
+                Plane3::new(Vector3::X, half_x),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(1),
             ),
             Halfspace::new(
-                Plane::new(-Vector3::X, half_x),
+                Plane3::new(-Vector3::X, half_x),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(2),
             ),
             Halfspace::new(
-                Plane::new(Vector3::Y, half_y),
+                Plane3::new(Vector3::Y, half_y),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(3),
             ),
             Halfspace::new(
-                Plane::new(-Vector3::Y, half_y),
+                Plane3::new(-Vector3::Y, half_y),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(4),
             ),
             Halfspace::new(
-                Plane::new(Vector3::Z, half_z),
+                Plane3::new(Vector3::Z, half_z),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(5),
             ),
             Halfspace::new(
-                Plane::new(-Vector3::Z, half_z),
+                Plane3::new(-Vector3::Z, half_z),
                 HalfspaceContents::empty(),
                 HalfspaceContents::solid(metadata),
             ),
         ];
 
-        let bounds = BoundingBox::new(
+        let bounds = BoundingBox3::new(
             Vector3::new(-half_x, -half_y, -half_z),
             Vector3::new(half_x, half_y, half_z),
         );
@@ -851,28 +1023,46 @@ impl GeometryTree {
         GeometryTree { nodes, bounds }
     }
 
-    pub fn get_bounds(&self) -> BoundingBox {
-        self.bounds
+    pub fn get_bounds(&self) -> &BoundingBox3 {
+        &self.bounds
     }
 
-    pub fn get_bounds_radius(&self) -> f32 {
-        (self.bounds.min - self.bounds.max).length() / 2.0
-    }
-
-    /// Move the tree by an offset
-    pub fn transform(&mut self, transform: Transform) {
+    pub fn transform(&mut self, transform: Transform3) {
         for x in &mut self.nodes {
-            let offset_distance = transform.position.dot(x.plane.normal);
-
-            x.plane.distance += offset_distance;
             x.plane.normal = transform.rotation.rotate_vector(x.plane.normal);
+            x.plane.distance += transform.position.dot(x.plane.normal);
         }
 
-        self.bounds.min += transform.position;
-        self.bounds.max += transform.position;
+        let corners = [
+            self.bounds.min,
+            Vector3::new(self.bounds.max.x, self.bounds.min.y, self.bounds.min.z),
+            Vector3::new(self.bounds.min.x, self.bounds.max.y, self.bounds.min.z),
+            Vector3::new(self.bounds.min.x, self.bounds.min.y, self.bounds.max.z),
+            Vector3::new(self.bounds.min.x, self.bounds.max.y, self.bounds.max.z),
+            Vector3::new(self.bounds.max.x, self.bounds.min.y, self.bounds.max.z),
+            Vector3::new(self.bounds.max.x, self.bounds.max.y, self.bounds.min.z),
+            self.bounds.max,
+        ];
 
-        transform.rotation.rotate_vector(self.bounds.min);
-        transform.rotation.rotate_vector(self.bounds.max);
+        let mut new_min = Vector3::one() * f32::INFINITY;
+        let mut new_max = Vector3::one() * f32::NEG_INFINITY;
+
+        for corner in corners {
+            let point = transform.transform_vector(corner);
+
+            new_min = Vector3::new(
+                new_min.x.min(point.x),
+                new_min.y.min(point.y),
+                new_min.z.min(point.z),
+            );
+            new_max = Vector3::new(
+                new_max.x.max(point.x),
+                new_max.y.max(point.y),
+                new_max.z.max(point.z),
+            );
+        }
+
+        self.bounds = BoundingBox3::new(new_min, new_max);
     }
 
     pub fn invert(&mut self) {
@@ -880,7 +1070,7 @@ impl GeometryTree {
             x.invert();
         }
 
-        self.bounds = BoundingBox::new(
+        self.bounds = BoundingBox3::new(
             Vector3::one() * f32::NEG_INFINITY,
             Vector3::one() * f32::INFINITY,
         );
@@ -911,7 +1101,7 @@ impl GeometryTree {
         }
 
         self.nodes.append(&mut tree.nodes);
-        self.bounds = self.bounds.union(tree.bounds);
+        self.bounds = self.bounds.union(&tree.bounds);
     }
 
     /// Perform a CSG intersection with another Tree
@@ -939,11 +1129,11 @@ impl GeometryTree {
         }
 
         self.nodes.append(&mut tree.nodes);
-        self.bounds = self.bounds.intersection(tree.bounds);
+        self.bounds = self.bounds.intersection(&tree.bounds);
     }
 
-    /// Please note that this is an overestimation of the hull except in the case where radius is 0
-    pub fn spherecast(&self, radius: f32, origin: Vector3, dir: Vector3) -> Option<SpherecastData> {
+    /// Cast a ray into a CSG shape
+    pub fn raycast(&self, origin: Vector3, dir: Vector3) -> Option<RaycastData> {
         if self.nodes.is_empty() {
             return None;
         }
@@ -958,7 +1148,7 @@ impl GeometryTree {
             if contents.is_solid()
                 && let Some(normal) = normal
             {
-                return Some(SpherecastData {
+                return Some(RaycastData {
                     position: origin + dir * t_min,
                     normal,
                     t: t_min,
@@ -971,11 +1161,7 @@ impl GeometryTree {
                 continue;
             }
 
-            let mut node = self.nodes[contents.get_index().unwrap() as usize].clone();
-
-            if node.plane.normal.dot(dir) < 0.0 {
-                node.plane.distance += radius;
-            }
+            let node = self.nodes[contents.get_index().unwrap() as usize].clone();
 
             let start_dist = node.plane.distance_to_point(origin + dir * t_min);
             let end_dist = node.plane.distance_to_point(origin + dir * t_max);
@@ -998,8 +1184,238 @@ impl GeometryTree {
         None
     }
 
+    pub fn treecast(
+        &self,
+        other: &GeometryTree,
+        transform: Transform3,
+        displacement: Vector3,
+    ) -> Option<RaycastData> {
+        if self.nodes.is_empty() || other.nodes.is_empty() {
+            return None;
+        }
+
+        let mut new_min = Vector3::one() * f32::INFINITY;
+        let mut new_max = Vector3::one() * f32::NEG_INFINITY;
+
+        let corners = [
+            other.bounds.min,
+            Vector3::new(other.bounds.max.x, other.bounds.min.y, other.bounds.min.z),
+            Vector3::new(other.bounds.min.x, other.bounds.max.y, other.bounds.min.z),
+            Vector3::new(other.bounds.min.x, other.bounds.min.y, other.bounds.max.z),
+            Vector3::new(other.bounds.min.x, other.bounds.max.y, other.bounds.max.z),
+            Vector3::new(other.bounds.max.x, other.bounds.min.y, other.bounds.max.z),
+            Vector3::new(other.bounds.max.x, other.bounds.max.y, other.bounds.min.z),
+            other.bounds.max,
+            other.bounds.min + displacement,
+            Vector3::new(other.bounds.max.x, other.bounds.min.y, other.bounds.min.z) + displacement,
+            Vector3::new(other.bounds.min.x, other.bounds.max.y, other.bounds.min.z) + displacement,
+            Vector3::new(other.bounds.min.x, other.bounds.min.y, other.bounds.max.z) + displacement,
+            Vector3::new(other.bounds.min.x, other.bounds.max.y, other.bounds.max.z) + displacement,
+            Vector3::new(other.bounds.max.x, other.bounds.min.y, other.bounds.max.z) + displacement,
+            Vector3::new(other.bounds.max.x, other.bounds.max.y, other.bounds.min.z) + displacement,
+            other.bounds.max + displacement,
+        ];
+
+        for corner in corners {
+            let point = transform.transform_vector(corner);
+
+            new_min = Vector3::new(
+                new_min.x.min(point.x),
+                new_min.y.min(point.y),
+                new_min.z.min(point.z),
+            );
+            new_max = Vector3::new(
+                new_max.x.max(point.x),
+                new_max.y.max(point.y),
+                new_max.z.max(point.z),
+            );
+        }
+
+        let bounds = BoundingBox3::new(new_min, new_max);
+
+        if !self.bounds.intersects(&bounds) {
+            return None;
+        }
+
+        enum Command {
+            PopContraint,
+            PushContraint(Plane3, bool),
+            ProcessNode(HalfspaceContents, bool),
+        }
+
+        let mut stack = vec![Command::ProcessNode(HalfspaceContents::index(0), false)];
+        let mut path = vec![];
+
+        let mut best_hit: Option<RaycastData> = None;
+
+        while let Some(command) = stack.pop() {
+            match command {
+                Command::PopContraint => {
+                    path.pop();
+                }
+                Command::PushContraint(plane, is_dynamic) => {
+                    path.push((plane, is_dynamic));
+                }
+                Command::ProcessNode(contents, is_second_tree) => {
+                    if contents.is_solid() && is_second_tree {
+                        if let Some(hit) = Self::solve_constraints(&path, transform, displacement)
+                            && best_hit.map_or(true, |h| hit.t < h.t)
+                        {
+                            best_hit = Some(hit)
+                        }
+
+                        continue;
+                    } else if contents.is_solid() {
+                        stack.push(Command::ProcessNode(HalfspaceContents::index(0), true));
+                        continue;
+                    }
+
+                    if contents.is_empty() {
+                        continue;
+                    }
+
+                    let node = if is_second_tree {
+                        let mut node = other.nodes[contents.get_index().unwrap() as usize].clone();
+
+                        node.plane.normal = transform.rotation.rotate_vector(node.plane.normal);
+                        node.plane.distance += node.plane.normal.dot(transform.position);
+
+                        node
+                    } else {
+                        self.nodes[contents.get_index().unwrap() as usize].clone()
+                    };
+
+                    let class = node.plane.classify_aabb(&bounds);
+
+                    if class == PlaneSide::Positive {
+                        stack.push(Command::PopContraint);
+                        stack.push(Command::ProcessNode(node.positive, is_second_tree));
+                        stack.push(Command::PushContraint(node.plane.flip(), is_second_tree));
+                    } else if class == PlaneSide::Negative {
+                        stack.push(Command::PopContraint);
+                        stack.push(Command::ProcessNode(node.negative, is_second_tree));
+                        stack.push(Command::PushContraint(node.plane, is_second_tree));
+                    } else if class == PlaneSide::Both {
+                        stack.push(Command::PopContraint);
+                        stack.push(Command::ProcessNode(node.positive, is_second_tree));
+                        stack.push(Command::PushContraint(node.plane.flip(), is_second_tree));
+
+                        stack.push(Command::PopContraint);
+                        stack.push(Command::ProcessNode(node.negative, is_second_tree));
+                        stack.push(Command::PushContraint(node.plane, is_second_tree));
+                    }
+                }
+            }
+        }
+
+        best_hit
+    }
+
+    pub const MAX_TREECAST_ITERATIONS: usize = 30;
+    pub const SLOP_TREECAST_EPSILON: f32 = 1e-5;
+
+    fn solve_constraints(
+        constraints: &[(Plane3, bool)],
+        transform: Transform3,
+        displacement: Vector3,
+    ) -> Option<RaycastData> {
+        let mut x = Vector4::new(
+            transform.position.x,
+            transform.position.y,
+            transform.position.z,
+            0.0,
+        );
+
+        let mut solved = false;
+
+        for _ in 0..Self::MAX_TREECAST_ITERATIONS {
+            let mut most_violated_spacetime_plane = None;
+
+            for (plane, is_dynamic) in constraints {
+                let ndotv = plane.normal.dot(displacement);
+
+                let normal = if *is_dynamic {
+                    if ndotv < -1e-4 {
+                        continue;
+                    }
+
+                    Vector4::new(plane.normal.x, plane.normal.y, plane.normal.z, -ndotv)
+                } else {
+                    if ndotv > 1e-4 {
+                        continue;
+                    }
+
+                    Vector4::new(plane.normal.x, plane.normal.y, plane.normal.z, 0.0)
+                };
+
+                let distance = normal.dot(x) - plane.distance;
+
+                if distance > Self::SLOP_TREECAST_EPSILON {
+                    match most_violated_spacetime_plane {
+                        Some((_, best_distance)) => {
+                            if distance > best_distance {
+                                most_violated_spacetime_plane = Some((normal, distance))
+                            }
+                        }
+                        None => most_violated_spacetime_plane = Some((normal, distance)),
+                    }
+                }
+            }
+
+            if let Some((normal, distance)) = most_violated_spacetime_plane {
+                let len_sq = normal.length_squared();
+
+                x = x - normal * distance / len_sq;
+
+                if x.w < 0.0 {
+                    x.w = 0.0;
+                }
+
+                if x.w > 1.0 {
+                    return None;
+                }
+            } else {
+                solved = true;
+                break;
+            }
+        }
+
+        if solved {
+            let solution_position = Vector3::new(x.x, x.y, x.z);
+            let t = x.w;
+
+            let mut best_normal = Vector3::zero();
+            let mut max_distance = f32::NEG_INFINITY;
+
+            for (plane, is_dynamic) in constraints {
+                if *is_dynamic {
+                    continue;
+                }
+
+                let distance = plane.distance_to_point(solution_position);
+
+                if distance > max_distance {
+                    max_distance = distance;
+                    best_normal = plane.normal;
+                }
+            }
+
+            if best_normal.dot(displacement) > 1e-3 {
+                return None;
+            }
+
+            return Some(RaycastData {
+                position: solution_position,
+                normal: best_normal,
+                t,
+            });
+        }
+
+        None
+    }
+
     /// Perform a point containment test against the BSP
-    pub fn contains(&mut self, point: Vector3) -> bool {
+    pub fn contains(&self, point: Vector3) -> bool {
         if self.nodes.is_empty() {
             return false;
         }

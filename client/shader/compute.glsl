@@ -55,6 +55,7 @@ vec4 quat_inv(vec4 q) {
 void transform_ray_to_local(inout vec3 origin, inout vec3 direction) {
     origin -= push_data.position;
     vec4 inv_rot = quat_inv(push_data.rotation);
+
     origin = rotate_vector(origin, inv_rot);
     direction = rotate_vector(direction, inv_rot);
 }
@@ -71,6 +72,56 @@ float intersect_plane(vec3 origin, vec3 direction, vec3 normal, float distance) 
 
 float plane_distance(vec3 point, vec3 normal, float d) {
     return dot(point, normal) - d;
+}
+
+vec4 getColor(uint material, vec3 normal, vec3 view_dir) {
+    vec3 n = normalize(normal);
+    vec3 v = normalize(view_dir);
+
+    vec3 light_dir = normalize(vec3(0.5, 1.0, 0.3));
+    float diffuse = max(dot(n, light_dir), 0.0);
+
+    float ambient = 0.2;
+
+    float lighting = ambient + diffuse * 0.8;
+
+    vec3 base_color;
+    float roughness = 0.5;
+
+    float fresnel = pow(1.0 - max(dot(n, v), 0.0), 5.0);
+
+    if (material == STEEL) {
+        base_color = vec3(0.7, 0.7, 0.75);
+        roughness = 0.3;
+
+        vec3 reflect_dir = reflect(-light_dir, n);
+        float spec = pow(max(dot(v, reflect_dir), 0.0), 32.0);
+        lighting += spec * 0.5;
+
+        lighting = mix(lighting, lighting * 1.5, fresnel * 0.4);
+    } else if (material == PLASTIC) {
+        base_color = vec3(0.8, 0.3, 0.2);
+        roughness = 0.6;
+
+        vec3 reflect_dir = reflect(-light_dir, n);
+        float spec = pow(max(dot(v, reflect_dir), 0.0), 16.0);
+        lighting += spec * 0.2;
+    } else if (material == GLASS) {
+        base_color = vec3(0.85, 0.9, 1.0);
+        roughness = 0.05;
+
+        vec3 reflect_dir = reflect(-light_dir, n);
+        float spec = pow(max(dot(v, reflect_dir), 0.0), 64.0);
+        lighting += spec * 0.8;
+
+        lighting = mix(lighting, 1.5, fresnel * 0.6);
+    } else {
+        base_color = vec3(0.5, 0.5, 0.5);
+    }
+
+    vec3 final_color = base_color * lighting;
+
+    return vec4(final_color, 1.0);
 }
 
 void main() {
@@ -170,8 +221,12 @@ void main() {
         return;
     }
 
-    vec3 color = stack[stack_pointer].normal * 0.5 + 0.5;
+    uint material = stack[stack_pointer].node & 0x7FFFFFFF;
+    vec3 normal = stack[stack_pointer].normal;
 
-    imageStore(img, pixel, vec4(color, 1.0));
+    vec3 view_direction = view_data.camera_position - (ray_origin + ray_direction * depth_current);
+    vec4 color = getColor(material, normal, view_direction);
+
+    imageStore(img, pixel, color);
     imageStore(depth_img, pixel, vec4(depth_current, 0.0, 0.0, 0.0));
 }
