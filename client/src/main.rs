@@ -17,6 +17,7 @@ use winit_input_helper::WinitInputHelper;
 
 use crate::render::{CameraData, CameraInput, CameraMode, Renderable, Renderer};
 
+mod net;
 mod render;
 
 pub struct Game {

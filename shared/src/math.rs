@@ -5,6 +5,7 @@ use std::{
         Add, AddAssign, ControlFlow, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub,
         SubAssign,
     },
+    task::Poll,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -1318,8 +1319,9 @@ impl GeometryTree {
 
     //TODO(arcprime): the convergence on this is better, but still needs work
 
-    pub const TREECAST_ITERATION_MAX: usize = 500;
-    pub const TREECAST_OVERRELAXATION: f32 = 1.2;
+    pub const TREECAST_ITERATION_MAX: usize = 100;
+    pub const TREECAST_TIME_DRAG: f32 = 0.5;
+    pub const TREECAST_STOP_EPSILON: f32 = 1e-5;
 
     fn solve_spacetime_constraints(
         constraints: &[(Plane3, bool)],
@@ -1333,13 +1335,15 @@ impl GeometryTree {
         }
 
         let direction = displacement / max_distance;
-        let mut point = Vector4::new(starting_point.x, starting_point.y, starting_point.z, 0.0);
-        let mut best_normal = constraints[0].0.normal;
+        let mut point = Vector4::new(starting_point.x, starting_point.y, starting_point.z, 0.5);
 
         for _ in 0..Self::TREECAST_ITERATION_MAX {
-            let mut solved = true;
+            let start_time = point.w;
 
             for (plane, is_dynamic) in constraints {
+                point.w *= Self::TREECAST_TIME_DRAG;
+                point.w = point.w.clamp(0.0, max_distance);
+
                 let normal = if *is_dynamic {
                     let time = -plane.normal.dot(direction);
 
@@ -1351,24 +1355,37 @@ impl GeometryTree {
                 let distance = normal.dot(point) - plane.distance;
 
                 if distance > 0.0 {
-                    solved = false;
-                    point -=
-                        normal * distance / normal.length_squared() * Self::TREECAST_OVERRELAXATION;
-
-                    best_normal = plane.normal;
+                    point -= normal * distance / normal.length_squared();
                 }
-
-                point.w = point.w.clamp(0.0, max_distance);
             }
 
-            if solved {
+            if (point.w - start_time).abs() < Self::TREECAST_STOP_EPSILON {
+                let position = Vector3::new(point.x, point.y, point.z);
+                let mut closest_face = constraints[0].0.normal;
+                let mut closest_distance = f32::INFINITY;
+
+                for (plane, is_dynamic) in constraints {
+                    if *is_dynamic {
+                        continue;
+                    }
+
+                    let distance = plane.distance_to_point(position);
+
+                    if distance.abs() < closest_distance {
+                        closest_distance = distance.abs();
+                        closest_face = plane.normal;
+                    }
+                }
+
                 return Some(RaycastData {
-                    position: Vector3::new(point.x, point.y, point.z),
-                    normal: best_normal,
+                    position,
+                    normal: closest_face,
                     t: point.w / max_distance,
                 });
             }
         }
+
+        println!("FAiled");
 
         None
     }
