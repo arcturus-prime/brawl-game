@@ -136,6 +136,7 @@ impl Game {
 
         s.temp_create_local_player();
         s.temp_add_object_static();
+        s.temp_add_object_dynamic();
 
         s
     }
@@ -172,15 +173,15 @@ impl Game {
         let id = self.reserver.reserve();
 
         let mut collider = GeometryTree::from_cube(10.0, 10.0, 10.0, 1);
-        let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
-        hole.transform(Transform3::from_position(Vector3::Y * 5.0));
-        hole.invert();
-        collider.intersection(hole);
+        // let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
+        // hole.transform(Transform3::from_position(Vector3::Y * 5.0));
+        // hole.invert();
+        // collider.intersection(hole);
 
-        let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
-        hole.transform(Transform3::from_position(Vector3::Y * -4.0));
-        hole.invert();
-        collider.intersection(hole);
+        // let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
+        // hole.transform(Transform3::from_position(Vector3::Y * -4.0));
+        // hole.invert();
+        // collider.intersection(hole);
 
         let mut renderable = self.renderer.create_renderable().unwrap();
         renderable.set_nodes(&collider).unwrap();
@@ -189,6 +190,25 @@ impl Game {
         self.renderable.insert(id, renderable);
         self.transforms
             .insert(id, Transform3::from_position(Vector3::X * 20.0));
+    }
+
+    fn temp_add_object_dynamic(&mut self) {
+        let id = self.reserver.reserve();
+
+        let mut collider = GeometryTree::from_cube(5.0, 5.0, 5.0, 1);
+        let mut hole = GeometryTree::from_cube(10.0, 4.0, 4.0, 1);
+        hole.transform(Transform3::from_position(Vector3::Y * 3.0));
+        hole.invert();
+        collider.intersection(hole);
+
+        let mut renderable = self.renderer.create_renderable().unwrap();
+        renderable.set_nodes(&collider).unwrap();
+
+        self.momenta.insert(id, Moment::new(5.0));
+        self.colliders.insert(id, collider);
+        self.renderable.insert(id, renderable);
+        self.transforms
+            .insert(id, Transform3::from_position(Vector3::X * -10.0));
     }
 
     pub fn render(&mut self) {
@@ -207,17 +227,17 @@ impl Game {
         let dt = (new_update_time - self.last_update).as_secs_f32();
         self.last_update = new_update_time;
 
+        let dampening = 0.01;
+
+        self.cameras[self.camera_id].handle_input(CameraInput {
+            delta_x: self.input.mouse_diff().0 * dampening,
+            delta_y: self.input.mouse_diff().1 * dampening,
+            delta_scroll: self.input.scroll_diff().1,
+        });
+
+        self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
+
         self.ticker.update(dt, |tick, dt| {
-            let dampening = 0.01;
-
-            self.cameras[self.camera_id].handle_input(CameraInput {
-                delta_x: self.input.mouse_diff().0 * dampening,
-                delta_y: self.input.mouse_diff().1 * dampening,
-                delta_scroll: self.input.scroll_diff().1,
-            });
-
-            self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
-
             if let Some(player) = self.players.get_mut(self.local_player_id) {
                 let camera_tranform = self.transforms[self.camera_id];
                 let mut move_direction = Vector3::zero();

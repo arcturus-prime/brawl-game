@@ -19,7 +19,7 @@ pub enum Packet {
     },
 }
 
-pub struct Network {
+pub struct NetworkQueue {
     send: VecDeque<Packet>,
     receive: VecDeque<Packet>,
 }

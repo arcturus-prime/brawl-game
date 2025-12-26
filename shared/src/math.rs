@@ -1,5 +1,5 @@
 use std::{
-    f32::EPSILON,
+    f32::{self, EPSILON, NAN},
     f64::INFINITY,
     ops::{
         Add, AddAssign, ControlFlow, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub,
@@ -1316,106 +1316,58 @@ impl GeometryTree {
         best_hit
     }
 
-    // TODO(arcprime): this needs some serious numerical robustness work
+    //TODO(arcprime): the convergence on this is better, but still needs work
 
-    pub const MAX_TREECAST_ITERATIONS: usize = 30;
-    pub const SLOP_TREECAST_EPSILON: f32 = 1e-5;
+    pub const TREECAST_ITERATION_MAX: usize = 500;
+    pub const TREECAST_OVERRELAXATION: f32 = 1.2;
 
     fn solve_spacetime_constraints(
         constraints: &[(Plane3, bool)],
         starting_point: Vector3,
         displacement: Vector3,
     ) -> Option<RaycastData> {
-        let mut x = Vector4::new(starting_point.x, starting_point.y, starting_point.z, 0.0);
+        let max_distance = displacement.length();
 
-        let mut solved = false;
+        if max_distance < EPSILON {
+            return None;
+        }
 
-        for _ in 0..Self::MAX_TREECAST_ITERATIONS {
-            let mut most_violated_spacetime_plane = None;
+        let direction = displacement / max_distance;
+        let mut point = Vector4::new(starting_point.x, starting_point.y, starting_point.z, 0.0);
+        let mut best_normal = constraints[0].0.normal;
+
+        for _ in 0..Self::TREECAST_ITERATION_MAX {
+            let mut solved = true;
 
             for (plane, is_dynamic) in constraints {
-                let normal_dot_displacement = plane.normal.dot(displacement);
-
                 let normal = if *is_dynamic {
-                    if normal_dot_displacement < -1e-4 {
-                        continue;
-                    }
+                    let time = -plane.normal.dot(direction);
 
-                    Vector4::new(
-                        plane.normal.x,
-                        plane.normal.y,
-                        plane.normal.z,
-                        -normal_dot_displacement,
-                    )
+                    Vector4::new(plane.normal.x, plane.normal.y, plane.normal.z, time)
                 } else {
-                    if normal_dot_displacement > 1e-4 {
-                        continue;
-                    }
-
                     Vector4::new(plane.normal.x, plane.normal.y, plane.normal.z, 0.0)
                 };
 
-                let distance = normal.dot(x) - plane.distance;
+                let distance = normal.dot(point) - plane.distance;
 
-                if distance > Self::SLOP_TREECAST_EPSILON {
-                    match most_violated_spacetime_plane {
-                        Some((_, best_distance)) => {
-                            if distance > best_distance {
-                                most_violated_spacetime_plane = Some((normal, distance))
-                            }
-                        }
-                        None => most_violated_spacetime_plane = Some((normal, distance)),
-                    }
-                }
-            }
+                if distance > 0.0 {
+                    solved = false;
+                    point -=
+                        normal * distance / normal.length_squared() * Self::TREECAST_OVERRELAXATION;
 
-            if let Some((normal, distance)) = most_violated_spacetime_plane {
-                let len_sq = normal.length_squared();
-
-                x = x - normal * distance / len_sq * 1.1;
-
-                if x.w < 0.0 {
-                    x.w = 0.0;
-                }
-
-                if x.w > 1.0 {
-                    return None;
-                }
-            } else {
-                solved = true;
-                break;
-            }
-        }
-
-        if solved {
-            let solution_position = Vector3::new(x.x, x.y, x.z);
-            let t = x.w;
-
-            let mut best_normal = Vector3::zero();
-            let mut max_distance = f32::NEG_INFINITY;
-
-            for (plane, is_dynamic) in constraints {
-                if *is_dynamic {
-                    continue;
-                }
-
-                let distance = plane.distance_to_point(solution_position);
-
-                if distance > max_distance {
-                    max_distance = distance;
                     best_normal = plane.normal;
                 }
+
+                point.w = point.w.clamp(0.0, max_distance);
             }
 
-            if best_normal.dot(displacement) > 1e-3 {
-                return None;
+            if solved {
+                return Some(RaycastData {
+                    position: Vector3::new(point.x, point.y, point.z),
+                    normal: best_normal,
+                    t: point.w / max_distance,
+                });
             }
-
-            return Some(RaycastData {
-                position: solution_position,
-                normal: best_normal,
-                t,
-            });
         }
 
         None
