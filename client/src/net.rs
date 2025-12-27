@@ -4,7 +4,7 @@ use std::{
     sync::mpsc::{Receiver, Sender},
 };
 
-use shared::net::Packet;
+use shared::{net::Packet, utility::ByteStream};
 
 pub struct NetworkClient {
     receive: std::sync::mpsc::Receiver<Packet>,
@@ -23,31 +23,47 @@ impl NetworkClient {
         let (receive_tx, receive_rx) = std::sync::mpsc::channel();
 
         let receive_socket = send_socket.try_clone()?;
-        let mut receive_buffer = vec![0; 2000];
+        let mut receive_buffer = vec![0; 1024];
         std::thread::spawn(move || {
             loop {
-                let Ok(size) = receive_socket.recv(&mut receive_buffer) else {
+                if let Err(e) = receive_socket.recv(&mut receive_buffer) {
+                    println!("Failed to receive packet from socket, reason: {}", e);
                     continue;
                 };
 
-                let packet = Packet::deserialize(&receive_buffer[0..size]);
+                let mut stream = ByteStream::new(&mut receive_buffer);
+                let packet = match Packet::deserialize(&mut stream) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        println!("Failed to deserialize packet, reason: {}", e);
+                        continue;
+                    }
+                };
 
                 if let Err(e) = receive_tx.send(packet) {
+                    println!("Failed to send packet to mpsc, reason: {}", e);
                     continue;
                 }
             }
         });
 
-        let mut send_buffer = vec![0; 2000];
+        let mut send_buffer = vec![0; 1024];
         std::thread::spawn(move || {
             loop {
+                let mut stream = ByteStream::new(&mut send_buffer);
+
                 let Ok(packet) = send_rx.recv() else {
+                    println!("Failed to get packet from mspc");
                     continue;
                 };
 
-                packet.serialize(&mut send_buffer);
+                if let Err(e) = packet.serialize(&mut stream) {
+                    println!("Failed to serialize packet, reason: {}", e);
+                    continue;
+                }
 
                 if let Err(e) = send_socket.send(&send_buffer) {
+                    println!("Failed to send packet to socket, reason: {}", e);
                     continue;
                 }
             }

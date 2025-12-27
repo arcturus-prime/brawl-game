@@ -1186,6 +1186,155 @@ impl GeometryTree {
         None
     }
 
+    pub fn treecast(
+        &self,
+        other: &GeometryTree,
+        transform: Transform3,
+        displacement: Vector3,
+    ) -> Option<RaycastData> {
+        if self.nodes.is_empty() || other.nodes.is_empty() {
+            return None;
+        }
+
+        let mut new_min = Vector3::one() * f32::INFINITY;
+        let mut new_max = Vector3::one() * f32::NEG_INFINITY;
+
+        let corners = [
+            other.bounds.min,
+            Vector3::new(other.bounds.max.x, other.bounds.min.y, other.bounds.min.z),
+            Vector3::new(other.bounds.min.x, other.bounds.max.y, other.bounds.min.z),
+            Vector3::new(other.bounds.min.x, other.bounds.min.y, other.bounds.max.z),
+            Vector3::new(other.bounds.min.x, other.bounds.max.y, other.bounds.max.z),
+            Vector3::new(other.bounds.max.x, other.bounds.min.y, other.bounds.max.z),
+            Vector3::new(other.bounds.max.x, other.bounds.max.y, other.bounds.min.z),
+            other.bounds.max,
+            other.bounds.min + displacement,
+            Vector3::new(other.bounds.max.x, other.bounds.min.y, other.bounds.min.z) + displacement,
+            Vector3::new(other.bounds.min.x, other.bounds.max.y, other.bounds.min.z) + displacement,
+            Vector3::new(other.bounds.min.x, other.bounds.min.y, other.bounds.max.z) + displacement,
+            Vector3::new(other.bounds.min.x, other.bounds.max.y, other.bounds.max.z) + displacement,
+            Vector3::new(other.bounds.max.x, other.bounds.min.y, other.bounds.max.z) + displacement,
+            Vector3::new(other.bounds.max.x, other.bounds.max.y, other.bounds.min.z) + displacement,
+            other.bounds.max + displacement,
+        ];
+
+        for corner in corners {
+            let point = transform.transform_vector(corner);
+
+            new_min = Vector3::new(
+                new_min.x.min(point.x),
+                new_min.y.min(point.y),
+                new_min.z.min(point.z),
+            );
+            new_max = Vector3::new(
+                new_max.x.max(point.x),
+                new_max.y.max(point.y),
+                new_max.z.max(point.z),
+            );
+        }
+
+        let bounds = BoundingBox3::new(new_min, new_max);
+
+        if !self.bounds.intersects(&bounds) {
+            return None;
+        }
+
+        let intersection = self.bounds.intersection(&bounds);
+        let starting_point = (intersection.max + intersection.min) / 2.0;
+
+        enum Command {
+            PopContraint,
+            PushContraint(Plane3, bool, bool),
+            ProcessNode(HalfspaceContents, bool),
+        }
+
+        let mut stack = vec![Command::ProcessNode(HalfspaceContents::index(0), false)];
+        let mut path = vec![];
+
+        let mut best_hit: Option<RaycastData> = None;
+
+        while let Some(command) = stack.pop() {
+            match command {
+                Command::PopContraint => {
+                    path.pop();
+                }
+                Command::PushContraint(plane, is_dynamic, is_inverted) => {
+                    path.push((plane, is_dynamic, is_inverted));
+                }
+                Command::ProcessNode(contents, is_second_tree) => {
+                    if contents.is_solid() && is_second_tree {
+                        if let Some(hit) =
+                            Self::solve_spacetime_constraints(&path, starting_point, displacement)
+                            && best_hit.map_or(true, |h| hit.t < h.t)
+                        {
+                            best_hit = Some(hit)
+                        }
+
+                        continue;
+                    } else if contents.is_solid() {
+                        stack.push(Command::ProcessNode(HalfspaceContents::index(0), true));
+                        continue;
+                    }
+
+                    if contents.is_empty() {
+                        continue;
+                    }
+
+                    let node = if is_second_tree {
+                        let mut node = other.nodes[contents.get_index().unwrap() as usize].clone();
+
+                        node.plane.normal = transform.rotation.rotate_vector(node.plane.normal);
+                        node.plane.distance += node.plane.normal.dot(transform.position);
+
+                        node
+                    } else {
+                        self.nodes[contents.get_index().unwrap() as usize].clone()
+                    };
+
+                    let class = node.plane.classify_aabb(&bounds);
+
+                    if class == PlaneSide::Positive {
+                        stack.push(Command::PopContraint);
+                        stack.push(Command::ProcessNode(node.positive, is_second_tree));
+                        stack.push(Command::PushContraint(
+                            node.plane.flip(),
+                            is_second_tree,
+                            true,
+                        ));
+                    } else if class == PlaneSide::Negative {
+                        stack.push(Command::PopContraint);
+                        stack.push(Command::ProcessNode(node.negative, is_second_tree));
+                        stack.push(Command::PushContraint(node.plane, is_second_tree, false));
+                    } else if class == PlaneSide::Both {
+                        stack.push(Command::PopContraint);
+                        stack.push(Command::ProcessNode(node.positive, is_second_tree));
+                        stack.push(Command::PushContraint(
+                            node.plane.flip(),
+                            is_second_tree,
+                            true,
+                        ));
+
+                        stack.push(Command::PopContraint);
+                        stack.push(Command::ProcessNode(node.negative, is_second_tree));
+                        stack.push(Command::PushContraint(node.plane, is_second_tree, false));
+                    }
+                }
+            }
+        }
+
+        best_hit
+    }
+
+    //TODO(arcprime): seidel's algorithm
+
+    fn solve_spacetime_constraints(
+        constraints: &[(Plane3, bool, bool)],
+        starting_point: Vector3,
+        displacement: Vector3,
+    ) -> Option<RaycastData> {
+        None
+    }
+
     /// Perform a point containment test against the BSP
     pub fn contains(&self, point: Vector3) -> bool {
         if self.nodes.is_empty() {

@@ -150,9 +150,9 @@ impl Game {
         self.players.insert(id, PlayerData::default());
 
         let mut collider = GeometryTree::from_cube(2.0, 2.0, 2.0, 1);
-        let mut hole = GeometryTree::from_cube(1.0, 1.0, 3.0, 1);
-        hole.invert();
-        collider.intersection(hole);
+        // let mut hole = GeometryTree::from_cube(1.0, 1.0, 3.0, 1);
+        // hole.invert();
+        // collider.intersection(hole);
 
         let mut renderable = self.renderer.create_renderable().unwrap();
         renderable.set_nodes(&collider).unwrap();
@@ -174,15 +174,15 @@ impl Game {
         let id = self.reserver.reserve();
 
         let mut collider = GeometryTree::from_cube(10.0, 10.0, 10.0, 1);
-        // let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
-        // hole.transform(Transform3::from_position(Vector3::Y * 5.0));
-        // hole.invert();
-        // collider.intersection(hole);
+        let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
+        hole.transform(Transform3::from_position(Vector3::Y * 5.0));
+        hole.invert();
+        collider.intersection(hole);
 
-        // let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
-        // hole.transform(Transform3::from_position(Vector3::Y * -4.0));
-        // hole.invert();
-        // collider.intersection(hole);
+        let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
+        hole.transform(Transform3::from_position(Vector3::Y * -4.0));
+        hole.invert();
+        collider.intersection(hole);
 
         let mut renderable = self.renderer.create_renderable().unwrap();
         renderable.set_nodes(&collider).unwrap();
@@ -228,16 +228,6 @@ impl Game {
         let dt = (new_update_time - self.last_update).as_secs_f32();
         self.last_update = new_update_time;
 
-        let dampening = 0.01;
-
-        self.cameras[self.camera_id].handle_input(CameraInput {
-            delta_x: self.input.mouse_diff().0 * dampening,
-            delta_y: self.input.mouse_diff().1 * dampening,
-            delta_scroll: self.input.scroll_diff().1,
-        });
-
-        self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
-
         self.ticker.update(dt, |tick, dt| {
             if let Some(player) = self.players.get_mut(self.local_player_id) {
                 let camera_tranform = self.transforms[self.camera_id];
@@ -279,6 +269,16 @@ impl Game {
 
             step_world(&self.colliders, &mut self.momenta, &mut self.transforms, dt);
         });
+
+        let dampening = 0.01;
+
+        self.cameras[self.camera_id].handle_input(CameraInput {
+            delta_x: self.input.mouse_diff().0 * dampening,
+            delta_y: self.input.mouse_diff().1 * dampening,
+            delta_scroll: self.input.scroll_diff().1,
+        });
+
+        self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
     }
 }
 
