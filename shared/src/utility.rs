@@ -1,9 +1,14 @@
 use std::{
+    fmt::Display,
     iter::Zip,
     ops::{Index, IndexMut},
     slice::{Iter, IterMut},
     usize,
 };
+
+use thiserror::Error;
+
+use crate::math::{Quaternion, Transform3, Vector3};
 
 #[derive(Clone)]
 pub struct SparseSet<T> {
@@ -142,5 +147,291 @@ impl IdReserver {
         self.id += 1;
 
         id
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ByteStreamError {
+    #[error("Out of bounds writer/read index")]
+    OutOfBounds,
+}
+
+#[derive(Default)]
+pub struct ByteStream<'a> {
+    buffer: &'a mut [u8],
+    read: usize,
+    write: usize,
+}
+
+impl<'a> ByteStream<'a> {
+    pub fn new(buffer: &'a mut [u8]) -> Self {
+        Self {
+            buffer,
+            read: 0,
+            write: 0,
+        }
+    }
+
+    pub fn seek_write(&mut self, cursor: usize) -> Result<(), ByteStreamError> {
+        if cursor >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        self.write = cursor;
+
+        Ok(())
+    }
+
+    pub fn seek_read(&mut self, cursor: usize) -> Result<(), ByteStreamError> {
+        if cursor >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        self.read = cursor;
+
+        Ok(())
+    }
+
+    pub fn get_write(&self) -> usize {
+        self.write
+    }
+
+    pub fn get_read(&self) -> usize {
+        self.read
+    }
+
+    pub fn write_u8(&mut self, data: u8) -> Result<(), ByteStreamError> {
+        if self.write == self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        self.buffer[self.write] = data;
+        self.write += 1;
+
+        Ok(())
+    }
+
+    pub fn write_u16(&mut self, data: u16) -> Result<(), ByteStreamError> {
+        if self.write + 1 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        for i in 0..2 {
+            self.buffer[self.write] = data.to_be_bytes()[i];
+            self.write += 1;
+        }
+
+        Ok(())
+    }
+
+    pub fn write_u32(&mut self, data: u32) -> Result<(), ByteStreamError> {
+        if self.write + 3 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        for i in 0..4 {
+            self.buffer[self.write] = data.to_be_bytes()[i];
+            self.write += 1;
+        }
+
+        Ok(())
+    }
+
+    pub fn write_u64(&mut self, data: u64) -> Result<(), ByteStreamError> {
+        if self.write + 7 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        for i in 0..8 {
+            self.buffer[self.write] = data.to_be_bytes()[i];
+            self.write += 1;
+        }
+
+        Ok(())
+    }
+
+    pub fn write_i8(&mut self, data: i8) -> Result<(), ByteStreamError> {
+        self.write_u8(data as u8)
+    }
+
+    pub fn write_i16(&mut self, data: i16) -> Result<(), ByteStreamError> {
+        self.write_u16(data as u16)
+    }
+
+    pub fn write_i32(&mut self, data: i32) -> Result<(), ByteStreamError> {
+        self.write_u32(data as u32)
+    }
+
+    pub fn write_i64(&mut self, data: i64) -> Result<(), ByteStreamError> {
+        self.write_u64(data as u64)
+    }
+
+    pub fn write_f32(&mut self, data: f32) -> Result<(), ByteStreamError> {
+        if self.write + 3 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        for i in 0..4 {
+            self.buffer[self.write] = data.to_be_bytes()[i];
+            self.write += 1;
+        }
+
+        Ok(())
+    }
+    pub fn write_f64(&mut self, data: f64) -> Result<(), ByteStreamError> {
+        if self.write + 7 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        for i in 0..8 {
+            self.buffer[self.write] = data.to_be_bytes()[i];
+            self.write += 1;
+        }
+
+        Ok(())
+    }
+
+    pub fn write_vec3(&mut self, data: Vector3) -> Result<(), ByteStreamError> {
+        self.write_f32(data.x)?;
+        self.write_f32(data.y)?;
+        self.write_f32(data.z)?;
+
+        Ok(())
+    }
+
+    pub fn write_quaternion(&mut self, data: Quaternion) -> Result<(), ByteStreamError> {
+        self.write_f32(data.x)?;
+        self.write_f32(data.y)?;
+        self.write_f32(data.z)?;
+        self.write_f32(data.w)?;
+
+        Ok(())
+    }
+
+    pub fn write_transform3(&mut self, data: Transform3) -> Result<(), ByteStreamError> {
+        self.write_vec3(data.position)?;
+        self.write_quaternion(data.rotation)?;
+
+        Ok(())
+    }
+
+    pub fn read_u8(&mut self) -> Result<u8, ByteStreamError> {
+        if self.read == self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        let data = self.buffer[self.read];
+        self.read += 1;
+
+        Ok(data)
+    }
+    pub fn read_u16(&mut self) -> Result<u16, ByteStreamError> {
+        if self.read + 1 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        let mut data = [0_u8; 2];
+
+        for i in 0..2 {
+            data[i] = self.buffer[self.read];
+            self.read += 1;
+        }
+
+        Ok(u16::from_be_bytes(data))
+    }
+    pub fn read_u32(&mut self) -> Result<u32, ByteStreamError> {
+        if self.read + 3 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        let mut data = [0_u8; 4];
+
+        for i in 0..4 {
+            data[i] = self.buffer[self.read];
+            self.read += 1;
+        }
+
+        Ok(u32::from_be_bytes(data))
+    }
+    pub fn read_u64(&mut self) -> Result<u64, ByteStreamError> {
+        if self.read + 7 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        let mut data = [0_u8; 8];
+
+        for i in 0..8 {
+            data[i] = self.buffer[self.read];
+            self.read += 1;
+        }
+
+        Ok(u64::from_be_bytes(data))
+    }
+
+    pub fn read_i8(&mut self) -> Result<i8, ByteStreamError> {
+        Ok(self.read_u8()? as i8)
+    }
+
+    pub fn read_i16(&mut self) -> Result<i16, ByteStreamError> {
+        Ok(self.read_u16()? as i16)
+    }
+
+    pub fn read_i32(&mut self) -> Result<i32, ByteStreamError> {
+        Ok(self.read_u32()? as i32)
+    }
+
+    pub fn read_i64(&mut self) -> Result<i64, ByteStreamError> {
+        Ok(self.read_u64()? as i64)
+    }
+
+    pub fn read_f32(&mut self) -> Result<f32, ByteStreamError> {
+        if self.read + 3 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        let mut data = [0_u8; 4];
+
+        for i in 0..4 {
+            data[i] = self.buffer[self.read];
+            self.read += 1;
+        }
+
+        Ok(f32::from_be_bytes(data))
+    }
+
+    pub fn read_f64(&mut self) -> Result<f64, ByteStreamError> {
+        if self.read + 3 >= self.buffer.len() {
+            return Err(ByteStreamError::OutOfBounds);
+        }
+
+        let mut data = [0_u8; 8];
+
+        for i in 0..8 {
+            data[i] = self.buffer[self.read];
+            self.read += 1;
+        }
+
+        Ok(f64::from_be_bytes(data))
+    }
+
+    pub fn read_vec3(&mut self) -> Result<Vector3, ByteStreamError> {
+        Ok(Vector3::new(
+            self.read_f32()?,
+            self.read_f32()?,
+            self.read_f32()?,
+        ))
+    }
+
+    pub fn read_quaternion(&mut self) -> Result<Quaternion, ByteStreamError> {
+        Ok(Quaternion::new(
+            self.read_f32()?,
+            self.read_f32()?,
+            self.read_f32()?,
+            self.read_f32()?,
+        ))
+    }
+
+    pub fn read_transform3(&mut self) -> Result<Transform3, ByteStreamError> {
+        Ok(Transform3::new(self.read_vec3()?, self.read_quaternion()?))
     }
 }
