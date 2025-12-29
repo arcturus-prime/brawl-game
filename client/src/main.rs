@@ -31,6 +31,7 @@ pub struct Game {
     renderable: SparseSet<Renderable>,
 
     reserver: IdReserver,
+
     ticker: Ticker,
 
     camera_id: usize,

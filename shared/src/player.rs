@@ -17,8 +17,7 @@ pub struct PlayerInputState {
 
 #[derive(Default)]
 pub struct PlayerData {
-    pub health: f32,
-    pub input_history: BTreeMap<u32, PlayerInputState>,
+    input_history: BTreeMap<u32, PlayerInputState>,
 }
 
 impl PlayerData {

@@ -4,11 +4,16 @@ use std::{
     sync::mpsc::{Receiver, Sender},
 };
 
-use shared::{net::Packet, utility::ByteStream};
+use shared::{
+    net::Packet,
+    utility::{ByteStream, IdReserver, SparseSet},
+};
 
 pub struct NetworkClient {
     receive: std::sync::mpsc::Receiver<Packet>,
     send: std::sync::mpsc::Sender<Packet>,
+
+    entity_map: SparseSet<usize>,
 }
 
 impl NetworkClient {
@@ -72,7 +77,20 @@ impl NetworkClient {
         Ok(Self {
             receive: receive_rx,
             send: send_tx,
+            entity_map: SparseSet::default(),
         })
+    }
+
+    pub fn translate_entity(&self, network_entity: usize) -> usize {
+        self.entity_map[network_entity]
+    }
+
+    pub fn reserve_entity(&mut self, network_entity: usize, reserver: &mut IdReserver) -> usize {
+        let id = reserver.reserve();
+
+        self.entity_map.insert(network_entity, id);
+
+        id
     }
 
     pub fn send(&mut self, packet: Packet) -> Result<(), Box<dyn Error>> {
