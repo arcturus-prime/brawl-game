@@ -1,7 +1,8 @@
-use std::time::Instant;
+use std::{net::SocketAddr, str::FromStr, time::Instant};
 
 use shared::{
     math::{GeometryTree, Transform3, Vector3},
+    net::{Network, Packet},
     physics::{Moment, step_world},
     player::{PlayerData, PlayerInputState},
     tick::Ticker,
@@ -15,9 +16,8 @@ use winit::{
 };
 use winit_input_helper::WinitInputHelper;
 
-use crate::render::{CameraData, CameraInput, CameraMode, Renderable, Renderer};
+use crate::render::{CameraData, CameraInput, Renderable, Renderer};
 
-mod net;
 mod render;
 
 pub struct Game {
@@ -31,8 +31,10 @@ pub struct Game {
     renderable: SparseSet<Renderable>,
 
     reserver: IdReserver,
-
     ticker: Ticker,
+
+    server_address: SocketAddr,
+    network: Network,
 
     camera_id: usize,
     local_player_id: usize,
@@ -42,12 +44,16 @@ pub struct Game {
 }
 
 pub struct App {
+    server_address: SocketAddr,
     game: Option<Game>,
 }
 
 impl App {
     pub fn new() -> Self {
-        Self { game: None }
+        Self {
+            game: None,
+            server_address: SocketAddr::from_str("0.0.0.0:0").unwrap(),
+        }
     }
 }
 
@@ -55,7 +61,14 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) {
         if self.game.is_none() {
             let renderer = Renderer::new(event_loop).unwrap();
-            self.game = Some(Game::new(renderer));
+            let mut network = Network::new(SocketAddr::from_str("0.0.0.0:0").unwrap()).unwrap();
+
+            network
+                .tx
+                .send(self.server_address, Packet::ClientHello)
+                .unwrap();
+
+            self.game = Some(Game::new(renderer, network, self.server_address));
         }
     }
 
@@ -110,7 +123,7 @@ impl ApplicationHandler for App {
 }
 
 impl Game {
-    pub fn new(renderer: Renderer) -> Self {
+    pub fn new(renderer: Renderer, network: Network, server_address: SocketAddr) -> Self {
         let mut reserver = IdReserver::default();
         let camera_id = reserver.reserve();
 
@@ -120,7 +133,9 @@ impl Game {
         let mut transforms = SparseSet::default();
         transforms.insert(camera_id, Transform3::identity());
 
-        let mut s = Self {
+        Self {
+            server_address,
+            network,
             last_update: Instant::now(),
             reserver,
             camera_id,
@@ -134,83 +149,7 @@ impl Game {
             renderer,
             ticker: Ticker::default(),
             input: WinitInputHelper::new(),
-        };
-
-        s.temp_create_local_player();
-        s.temp_add_object_static();
-        s.temp_add_object_dynamic();
-
-        s
-    }
-
-    fn temp_create_local_player(&mut self) {
-        let id = self.reserver.reserve();
-
-        self.transforms.insert(id, Transform3::identity());
-        self.momenta.insert(id, Moment::new(5.0));
-        self.players.insert(id, PlayerData::default());
-
-        let mut collider = GeometryTree::from_cube(2.0, 2.0, 2.0, 1);
-        // let mut hole = GeometryTree::from_cube(1.0, 1.0, 3.0, 1);
-        // hole.invert();
-        // collider.intersection(hole);
-
-        let mut renderable = self.renderer.create_renderable().unwrap();
-        renderable.set_nodes(&collider).unwrap();
-
-        self.renderable.insert(id, renderable);
-        self.colliders.insert(id, collider);
-
-        self.cameras[self.camera_id].mode = CameraMode::Orbit {
-            theta: 0.0,
-            azimuth: 0.0,
-            distance: 10.0,
-            target: id,
-        };
-
-        self.local_player_id = id;
-    }
-
-    fn temp_add_object_static(&mut self) {
-        let id = self.reserver.reserve();
-
-        let mut collider = GeometryTree::from_cube(10.0, 10.0, 10.0, 1);
-        let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
-        hole.transform(Transform3::from_position(Vector3::Y * 5.0));
-        hole.invert();
-        collider.intersection(hole);
-
-        let mut hole = GeometryTree::from_cube(17.5, 5.0, 5.0, 1);
-        hole.transform(Transform3::from_position(Vector3::Y * -4.0));
-        hole.invert();
-        collider.intersection(hole);
-
-        let mut renderable = self.renderer.create_renderable().unwrap();
-        renderable.set_nodes(&collider).unwrap();
-
-        self.colliders.insert(id, collider);
-        self.renderable.insert(id, renderable);
-        self.transforms
-            .insert(id, Transform3::from_position(Vector3::X * 20.0));
-    }
-
-    fn temp_add_object_dynamic(&mut self) {
-        let id = self.reserver.reserve();
-
-        let mut collider = GeometryTree::from_cube(5.0, 5.0, 5.0, 1);
-        let mut hole = GeometryTree::from_cube(10.0, 4.0, 4.0, 1);
-        hole.transform(Transform3::from_position(Vector3::Y * 3.0));
-        hole.invert();
-        collider.intersection(hole);
-
-        let mut renderable = self.renderer.create_renderable().unwrap();
-        renderable.set_nodes(&collider).unwrap();
-
-        self.momenta.insert(id, Moment::new(5.0));
-        self.colliders.insert(id, collider);
-        self.renderable.insert(id, renderable);
-        self.transforms
-            .insert(id, Transform3::from_position(Vector3::X * -10.0));
+        }
     }
 
     pub fn render(&mut self) {
@@ -228,6 +167,25 @@ impl Game {
         let new_update_time = Instant::now();
         let dt = (new_update_time - self.last_update).as_secs_f32();
         self.last_update = new_update_time;
+
+        for (address, packet) in self.network.rx.get_incoming() {
+            match packet {
+                shared::net::Packet::ClientHello => {
+                    eprintln!("Got unexpected ClientHello from server");
+                }
+                shared::net::Packet::ServerHello => {
+                    println!("Connected");
+                }
+                shared::net::Packet::PlayerJoin { id } => todo!(),
+                shared::net::Packet::PlayerLeave { id } => todo!(),
+                shared::net::Packet::PlayerInput { input } => todo!(),
+                shared::net::Packet::PlayerMovement {
+                    transform,
+                    velocity,
+                    id,
+                } => todo!(),
+            }
+        }
 
         self.ticker.update(dt, |tick, dt| {
             if let Some(player) = self.players.get_mut(self.local_player_id) {
@@ -286,6 +244,20 @@ impl Game {
 pub fn main() {
     let event_loop = EventLoop::new().unwrap();
     let mut app = App::new();
+
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.len() < 2 {
+        eprintln!("Usage: client.exe SERVER_IP_ADDRESS:SERVER_PORT");
+        return;
+    }
+
+    let Ok(address) = SocketAddr::from_str(&args[1]) else {
+        eprintln!("Invalid IP address and port");
+        return;
+    };
+
+    app.server_address = address;
 
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut app).unwrap();

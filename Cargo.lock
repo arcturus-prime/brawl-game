@@ -205,6 +205,7 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "shared",
+ "thiserror 2.0.17",
  "vulkano",
  "vulkano-shaders",
  "winit",

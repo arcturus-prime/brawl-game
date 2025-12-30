@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 shared = { workspace = true }
+thiserror = "2.0.17"
 vulkano = "0.35.2"
 vulkano-shaders = "0.35.0"
 winit = "0.30.12"

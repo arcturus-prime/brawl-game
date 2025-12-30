@@ -1,5 +1,4 @@
 use std::{
-    fmt::Display,
     iter::Zip,
     ops::{Index, IndexMut},
     slice::{Iter, IterMut},
@@ -38,6 +37,7 @@ impl<T> SparseSet<T> {
         self.index_to_id.push(id);
         self.data.push(data);
     }
+
     pub fn delete(&mut self, id: usize) -> usize {
         let index = self.id_to_index[id];
         let replacement_index = self.index_to_id.len() - 1;
@@ -139,14 +139,23 @@ impl<'a, T> Iterator for SparseSetIterMut<'a, T> {
 #[derive(Default)]
 pub struct IdReserver {
     id: usize,
+    deleted: Vec<usize>,
 }
 
 impl IdReserver {
     pub fn reserve(&mut self) -> usize {
+        if let Some(id) = self.deleted.pop() {
+            return id;
+        }
+
         let id = self.id;
         self.id += 1;
 
         id
+    }
+
+    pub fn delete(&mut self, id: usize) {
+        self.deleted.push(id);
     }
 }
 

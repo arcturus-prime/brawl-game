@@ -1,5 +1,3 @@
-// render.rs - Cleaner, more modular version
-
 use shared::{
     math::{GeometryTree, Quaternion, Transform3, Vector3},
     utility::SparseSet,
