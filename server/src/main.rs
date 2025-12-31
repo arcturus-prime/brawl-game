@@ -1,4 +1,6 @@
+use core::net;
 use std::{
+    collections::BTreeMap,
     net::{IpAddr, SocketAddr, SocketAddrV4},
     str::FromStr,
     time::Instant,
@@ -8,20 +10,19 @@ use shared::{
     math::{GeometryTree, Transform3},
     net::{Network, NetworkError, Packet},
     physics::Moment,
-    player::PlayerData,
+    player::{PlayerData, PlayerInputState},
     tick::Ticker,
     utility::{IdReserver, SparseSet},
 };
 
 pub struct Game {
-    last_update: Instant,
-
-    connections: SparseSet<SocketAddr>,
     transforms: SparseSet<Transform3>,
-    players: SparseSet<PlayerData>,
     colliders: SparseSet<GeometryTree>,
     momenta: SparseSet<Moment>,
+    inputs: SparseSet<BTreeMap<u32, PlayerInputState>>,
+    players: SparseSet<PlayerData>,
 
+    last_update: Instant,
     network: Network,
     reserver: IdReserver,
     ticker: Ticker,
@@ -33,15 +34,46 @@ impl Game {
         let dt = (new_update_time - self.last_update).as_secs_f32();
         self.last_update = new_update_time;
 
-        for (address, packet) in self.network.rx.get_incoming() {
+        while let Ok((client_id, packet)) = self.network.receive(&mut self.reserver) {
             match packet {
                 shared::net::Packet::ClientHello => {
-                    self.network.tx.send(address, Packet::ServerHello).unwrap();
+                    self.players.insert(client_id, PlayerData::default());
+                    self.inputs.insert(client_id, BTreeMap::new());
+                    self.transforms.insert(client_id, Transform3::identity());
+                    self.momenta.insert(client_id, Moment::new(5.0));
+
+                    let tree = GeometryTree::from_cube(1.0, 1.0, 1.0, 0);
+                    self.colliders.insert(client_id, tree);
+
+                    let net_id = self.network.reserve_network_entity(client_id);
+
+                    self.network
+                        .send_all_except(
+                            client_id,
+                            Packet::PlayerJoin {
+                                id: net_id,
+                                is_you: false,
+                            },
+                        )
+                        .unwrap();
+
+                    self.network
+                        .send(
+                            client_id,
+                            Packet::PlayerJoin {
+                                id: net_id,
+                                is_you: true,
+                            },
+                        )
+                        .unwrap();
                 }
-                shared::net::Packet::ServerHello => todo!(),
-                shared::net::Packet::PlayerJoin { id } => todo!(),
-                shared::net::Packet::PlayerLeave { id } => todo!(),
-                shared::net::Packet::PlayerInput { input } => todo!(),
+                shared::net::Packet::PlayerJoin { id, is_you } => {
+                    eprintln!("Unexpected player join packet received");
+                }
+                shared::net::Packet::PlayerLeave { id } => {
+                    eprintln!("Unexpected player leave packet received");
+                }
+                shared::net::Packet::PlayerInput { input } => {}
                 shared::net::Packet::PlayerMovement {
                     transform,
                     velocity,
@@ -55,9 +87,9 @@ impl Game {
 
     pub fn host(address: SocketAddr) -> Result<Self, NetworkError> {
         Ok(Self {
-            connections: SparseSet::default(),
             last_update: Instant::now(),
             transforms: SparseSet::default(),
+            inputs: SparseSet::default(),
             players: SparseSet::default(),
             colliders: SparseSet::default(),
             momenta: SparseSet::default(),

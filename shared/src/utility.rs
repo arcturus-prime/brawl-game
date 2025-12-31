@@ -159,6 +159,93 @@ impl IdReserver {
     }
 }
 
+#[derive(Default)]
+pub struct SingletonSet<T>(Option<(usize, T)>);
+
+impl<T> SingletonSet<T> {
+    pub fn get(&self, id: usize) -> Option<&T> {
+        let Some((valid_id, component)) = &self.0 else {
+            return None;
+        };
+
+        if id == *valid_id {
+            return Some(component);
+        }
+
+        None
+    }
+
+    pub fn get_mut(&mut self, id: usize) -> Option<&mut T> {
+        let Some((valid_id, component)) = &mut self.0 else {
+            return None;
+        };
+
+        if id == *valid_id {
+            return Some(component);
+        }
+
+        None
+    }
+
+    pub fn insert(&mut self, id: usize, data: T) {
+        self.0 = Some((id, data))
+    }
+
+    pub fn obtain(&self) -> Option<(&usize, &T)> {
+        let Some((id, component)) = self.0.as_ref() else {
+            return None;
+        };
+
+        Some((id, component))
+    }
+
+    pub fn obtain_mut(&mut self) -> Option<(&usize, &mut T)> {
+        let Some((id, component)) = self.0.as_mut() else {
+            return None;
+        };
+
+        Some((id, component))
+    }
+
+    pub fn unwrap(&self) -> (&usize, &T) {
+        let (id, component) = self.0.as_ref().unwrap();
+
+        (id, component)
+    }
+
+    pub fn unwrap_mut(&mut self) -> (&usize, &mut T) {
+        let (id, component) = self.0.as_mut().unwrap();
+
+        (id, component)
+    }
+}
+
+impl<T> Index<usize> for SingletonSet<T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        let (id, component) = self.0.as_ref().unwrap();
+
+        if *id != index {
+            panic!("Id does not match");
+        }
+
+        component
+    }
+}
+
+impl<T> IndexMut<usize> for SingletonSet<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        let (id, component) = self.0.as_mut().unwrap();
+
+        if *id != index {
+            panic!("Id does not match");
+        }
+
+        component
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ByteStreamError {
     #[error("Out of bounds writer/read index")]

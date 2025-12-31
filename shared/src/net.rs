@@ -1,6 +1,8 @@
 use std::{
+    collections::HashMap,
+    hash::Hash,
     io,
-    net::{SocketAddr, UdpSocket},
+    net::{SocketAddr, SocketAddrV4, UdpSocket},
     sync::mpsc::{Receiver, SendError, Sender, TryRecvError, TrySendError},
 };
 
@@ -17,21 +19,21 @@ use crate::{
 #[derive(Clone)]
 pub enum Packet {
     ClientHello = 0,
-    ServerHello = 1,
     PlayerJoin {
         id: usize,
-    } = 2,
+        is_you: bool,
+    } = 1,
     PlayerLeave {
         id: usize,
-    } = 3,
+    } = 2,
     PlayerInput {
         input: PlayerInputState,
-    } = 4,
+    } = 3,
     PlayerMovement {
         transform: Transform3,
         velocity: Vector3,
         id: usize,
-    } = 5,
+    } = 4,
 }
 
 #[derive(Debug, Error)]
@@ -54,7 +56,6 @@ impl Packet {
 
         match self {
             Packet::ClientHello => return Ok(()),
-            Packet::ServerHello => return Ok(()),
             Packet::PlayerMovement {
                 transform,
                 velocity,
@@ -69,8 +70,9 @@ impl Packet {
                 stream.write_vec3(input.want_direction)?;
                 stream.write_f32(input.throttle)?;
             }
-            Packet::PlayerJoin { id } => {
+            Packet::PlayerJoin { id, is_you } => {
                 stream.write_u64(id as u64)?;
+                stream.write_u8(is_you as u8)?;
             }
             Packet::PlayerLeave { id } => {
                 stream.write_u64(id as u64)?;
@@ -85,21 +87,21 @@ impl Packet {
 
         Ok(match id {
             0 => Packet::ClientHello,
-            1 => Packet::ServerHello,
-            2 => Packet::PlayerJoin {
+            1 => Packet::PlayerJoin {
+                id: stream.read_u64()? as usize,
+                is_you: stream.read_u8()? == 1,
+            },
+            2 => Self::PlayerLeave {
                 id: stream.read_u64()? as usize,
             },
-            3 => Self::PlayerLeave {
-                id: stream.read_u64()? as usize,
-            },
-            4 => Self::PlayerInput {
+            3 => Self::PlayerInput {
                 input: PlayerInputState {
                     look_direction: stream.read_vec3()?,
                     want_direction: stream.read_vec3()?,
                     throttle: stream.read_f32()?,
                 },
             },
-            5 => Self::PlayerMovement {
+            4 => Self::PlayerMovement {
                 id: stream.read_u64()? as usize,
                 transform: stream.read_transform3()?,
                 velocity: stream.read_vec3()?,
@@ -109,39 +111,16 @@ impl Packet {
     }
 }
 
-pub struct NetworkSender(Sender<(SocketAddr, Packet)>);
-
-impl NetworkSender {
-    pub fn send(&mut self, address: SocketAddr, packet: Packet) -> Result<(), NetworkError> {
-        self.0.send((address, packet))?;
-
-        Ok(())
-    }
-
-    pub fn send_all(
-        &mut self,
-        addresses: &SparseSet<SocketAddr>,
-        packet: Packet,
-    ) -> Result<(), NetworkError> {
-        for (_, address) in addresses.iter() {
-            self.send(*address, packet.clone())?
-        }
-
-        Ok(())
-    }
-}
-
-pub struct NetworkReceiver(Receiver<(SocketAddr, Packet)>);
-
-impl NetworkReceiver {
-    pub fn get_incoming(&self) -> impl Iterator<Item = (SocketAddr, Packet)> {
-        self.0.try_iter()
-    }
-}
-
 pub struct Network {
-    pub tx: NetworkSender,
-    pub rx: NetworkReceiver,
+    tx: Sender<(SocketAddr, Packet)>,
+    rx: Receiver<(SocketAddr, Packet)>,
+
+    registered_addresses: SparseSet<SocketAddr>,
+    registered_entities: HashMap<SocketAddr, usize>,
+
+    entity_to_network: SparseSet<usize>,
+    network_to_entity: SparseSet<usize>,
+    network_reserver: IdReserver,
 }
 
 impl Network {
@@ -198,8 +177,120 @@ impl Network {
         });
 
         Ok(Self {
-            tx: NetworkSender(send_tx),
-            rx: NetworkReceiver(receive_rx),
+            tx: send_tx,
+            rx: receive_rx,
+            registered_addresses: SparseSet::default(),
+            registered_entities: HashMap::new(),
+            entity_to_network: SparseSet::default(),
+            network_reserver: IdReserver::default(),
+            network_to_entity: SparseSet::default(),
         })
+    }
+
+    pub fn receive(&mut self, reserver: &mut IdReserver) -> Result<(usize, Packet), NetworkError> {
+        let (address, packet) = self.rx.try_recv()?;
+
+        if !self.registered_entities.contains_key(&address) {
+            let id = reserver.reserve();
+
+            self.registered_entities.insert(address, id);
+            self.registered_addresses.insert(id, address);
+        }
+
+        let id = self.registered_entities[&address];
+
+        Ok((id, packet))
+    }
+
+    pub fn send(&mut self, entity: usize, packet: Packet) -> Result<(), NetworkError> {
+        let address = self.registered_addresses[entity];
+
+        self.tx.send((address, packet))?;
+
+        Ok(())
+    }
+
+    pub fn send_all(&mut self, packet: Packet) -> Result<(), NetworkError> {
+        for (_, address) in self.registered_addresses.iter() {
+            self.tx.send((*address, packet.clone()))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn send_all_except(&mut self, except: usize, packet: Packet) -> Result<(), NetworkError> {
+        for (id, address) in self.registered_addresses.iter() {
+            if *id == except {
+                continue;
+            }
+
+            self.tx.send((*address, packet.clone()))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn add_client(&mut self, address: SocketAddr, reserver: &mut IdReserver) -> usize {
+        if !self.registered_entities.contains_key(&address) {
+            let id = reserver.reserve();
+
+            self.registered_entities.insert(address, id);
+            self.registered_addresses.insert(id, address);
+        }
+
+        let id = self.registered_entities[&address];
+
+        id
+    }
+
+    pub fn delete_client(&mut self, entity: usize) {
+        let address = self.registered_addresses[entity];
+
+        self.registered_addresses.delete(entity);
+        self.registered_entities.remove(&address);
+    }
+
+    pub fn reserve_real_entity(
+        &mut self,
+        reserver: &mut IdReserver,
+        network_entity: usize,
+    ) -> usize {
+        let id = reserver.reserve();
+
+        self.entity_to_network.insert(id, network_entity);
+        self.network_to_entity.insert(network_entity, id);
+
+        id
+    }
+
+    pub fn reserve_network_entity(&mut self, real_entity: usize) -> usize {
+        let network_id = self.network_reserver.reserve();
+
+        self.entity_to_network.insert(real_entity, network_id);
+        self.network_to_entity.insert(network_id, real_entity);
+
+        network_id
+    }
+
+    pub fn delete_real_entity(&mut self, entity: usize) {
+        let network_id = self.entity_to_network[entity];
+
+        self.entity_to_network.delete(entity);
+        self.network_to_entity.delete(network_id);
+    }
+
+    pub fn delete_network_entity(&mut self, entity: usize) {
+        let real_id = self.network_to_entity[entity];
+
+        self.entity_to_network.delete(real_id);
+        self.network_to_entity.delete(entity);
+    }
+
+    pub fn get_real_entity(&self, network_entity: usize) -> Option<&usize> {
+        self.network_to_entity.get(network_entity)
+    }
+
+    pub fn get_network_entity(&self, real_entity: usize) -> Option<&usize> {
+        self.entity_to_network.get(real_entity)
     }
 }

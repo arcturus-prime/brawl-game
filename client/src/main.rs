@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, str::FromStr, time::Instant};
+use std::{collections::BTreeMap, net::SocketAddr, str::FromStr, time::Instant};
 
 use shared::{
     math::{GeometryTree, Transform3, Vector3},
@@ -6,7 +6,7 @@ use shared::{
     physics::{Moment, step_world},
     player::{PlayerData, PlayerInputState},
     tick::Ticker,
-    utility::{IdReserver, SparseSet},
+    utility::{IdReserver, SingletonSet, SparseSet},
 };
 use winit::{
     application::ApplicationHandler,
@@ -21,26 +21,22 @@ use crate::render::{CameraData, CameraInput, Renderable, Renderer};
 mod render;
 
 pub struct Game {
-    last_update: Instant,
-
-    transforms: SparseSet<Transform3>,
-    players: SparseSet<PlayerData>,
-    colliders: SparseSet<GeometryTree>,
-    momenta: SparseSet<Moment>,
-    cameras: SparseSet<CameraData>,
-    renderable: SparseSet<Renderable>,
-
-    reserver: IdReserver,
-    ticker: Ticker,
-
-    server_address: SocketAddr,
-    network: Network,
-
-    camera_id: usize,
-    local_player_id: usize,
-
     pub input: WinitInputHelper,
     pub renderer: Renderer,
+
+    reserver: IdReserver,
+    network: Network,
+    last_update: Instant,
+    ticker: Ticker,
+
+    transforms: SparseSet<Transform3>,
+    colliders: SparseSet<GeometryTree>,
+    momenta: SparseSet<Moment>,
+    renderable: SparseSet<Renderable>,
+    camera: SingletonSet<CameraData>,
+
+    players: SparseSet<PlayerData>,
+    inputs: SingletonSet<BTreeMap<u32, PlayerInputState>>,
 }
 
 pub struct App {
@@ -61,14 +57,16 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) {
         if self.game.is_none() {
             let renderer = Renderer::new(event_loop).unwrap();
-            let mut network = Network::new(SocketAddr::from_str("0.0.0.0:0").unwrap()).unwrap();
+            let network = Network::new(SocketAddr::from_str("0.0.0.0:0").unwrap()).unwrap();
 
-            network
-                .tx
-                .send(self.server_address, Packet::ClientHello)
-                .unwrap();
+            let mut game = Game::new(renderer, network);
+            let id = game
+                .network
+                .add_client(self.server_address, &mut game.reserver);
 
-            self.game = Some(Game::new(renderer, network, self.server_address));
+            game.network.send(id, Packet::ClientHello).unwrap();
+
+            self.game = Some(game);
         }
     }
 
@@ -123,28 +121,17 @@ impl ApplicationHandler for App {
 }
 
 impl Game {
-    pub fn new(renderer: Renderer, network: Network, server_address: SocketAddr) -> Self {
-        let mut reserver = IdReserver::default();
-        let camera_id = reserver.reserve();
-
-        let mut cameras = SparseSet::default();
-        cameras.insert(camera_id, CameraData::default());
-
-        let mut transforms = SparseSet::default();
-        transforms.insert(camera_id, Transform3::identity());
-
+    pub fn new(renderer: Renderer, network: Network) -> Self {
         Self {
-            server_address,
             network,
             last_update: Instant::now(),
-            reserver,
-            camera_id,
-            local_player_id: usize::MAX,
-            cameras,
-            transforms,
+            reserver: IdReserver::default(),
+            camera: SingletonSet::default(),
+            transforms: SparseSet::default(),
             renderable: SparseSet::default(),
             colliders: SparseSet::default(),
             players: SparseSet::default(),
+            inputs: SingletonSet::default(),
             momenta: SparseSet::default(),
             renderer,
             ticker: Ticker::default(),
@@ -153,14 +140,16 @@ impl Game {
     }
 
     pub fn render(&mut self) {
-        self.renderer
-            .draw_scene(
-                self.transforms[self.camera_id],
-                self.cameras[self.camera_id].fov_y,
-                &self.renderable,
-                &self.transforms,
-            )
-            .unwrap();
+        if let Some((id, camera)) = self.camera.obtain() {
+            self.renderer
+                .draw_scene(
+                    self.transforms[*id],
+                    camera.fov_y,
+                    &self.renderable,
+                    &self.transforms,
+                )
+                .unwrap();
+        }
     }
 
     pub fn update(&mut self) {
@@ -168,15 +157,34 @@ impl Game {
         let dt = (new_update_time - self.last_update).as_secs_f32();
         self.last_update = new_update_time;
 
-        for (address, packet) in self.network.rx.get_incoming() {
+        while let Ok((_, packet)) = self.network.receive(&mut self.reserver) {
             match packet {
                 shared::net::Packet::ClientHello => {
                     eprintln!("Got unexpected ClientHello from server");
                 }
-                shared::net::Packet::ServerHello => {
-                    println!("Connected");
+                shared::net::Packet::PlayerJoin { id, is_you } => {
+                    let id = self.network.reserve_real_entity(&mut self.reserver, id);
+
+                    self.transforms.insert(id, Transform3::identity());
+                    self.momenta.insert(id, Moment::new(5.0));
+                    self.players.insert(id, PlayerData::default());
+
+                    let tree = GeometryTree::from_cube(1.0, 1.0, 1.0, 0);
+                    let mut renderable = self.renderer.create_renderable().unwrap();
+                    renderable.set_nodes(&tree).unwrap();
+
+                    self.renderable.insert(id, renderable);
+                    self.colliders.insert(id, tree);
+
+                    if is_you {
+                        self.inputs.insert(id, BTreeMap::new());
+
+                        let camera_id = self.reserver.reserve();
+
+                        self.transforms.insert(camera_id, Transform3::identity());
+                        self.camera.insert(camera_id, CameraData::orbit(id));
+                    }
                 }
-                shared::net::Packet::PlayerJoin { id } => todo!(),
                 shared::net::Packet::PlayerLeave { id } => todo!(),
                 shared::net::Packet::PlayerInput { input } => todo!(),
                 shared::net::Packet::PlayerMovement {
@@ -188,8 +196,10 @@ impl Game {
         }
 
         self.ticker.update(dt, |tick, dt| {
-            if let Some(player) = self.players.get_mut(self.local_player_id) {
-                let camera_tranform = self.transforms[self.camera_id];
+            if let Some((inputs_id, inputs)) = self.inputs.obtain_mut()
+                && let Some((camera_id, camera)) = self.camera.obtain()
+            {
+                let camera_tranform = self.transforms[*camera_id];
                 let mut move_direction = Vector3::zero();
 
                 if self.input.key_held(KeyCode::KeyW) {
@@ -208,22 +218,18 @@ impl Game {
                     move_direction += Vector3::Y;
                 }
 
-                player.set_input(
-                    tick,
-                    PlayerInputState {
-                        want_direction: camera_tranform.rotate_vector(move_direction),
-                        look_direction: camera_tranform.rotate_vector(Vector3::X),
-                        throttle: 1.0,
-                    },
+                let mut input = PlayerInputState {
+                    want_direction: camera_tranform.rotate_vector(move_direction),
+                    look_direction: camera_tranform.rotate_vector(Vector3::X),
+                    throttle: 1.0,
+                };
+
+                input.apply(
+                    &mut self.momenta[*inputs_id],
+                    &mut self.transforms[*inputs_id],
                 );
 
-                player
-                    .apply_input(
-                        tick,
-                        &mut self.momenta[self.local_player_id],
-                        &mut self.transforms[self.local_player_id],
-                    )
-                    .unwrap();
+                inputs.insert(tick, input);
             }
 
             step_world(&self.colliders, &mut self.momenta, &mut self.transforms, dt);
@@ -231,13 +237,15 @@ impl Game {
 
         let dampening = 0.01;
 
-        self.cameras[self.camera_id].handle_input(CameraInput {
-            delta_x: self.input.mouse_diff().0 * dampening,
-            delta_y: self.input.mouse_diff().1 * dampening,
-            delta_scroll: self.input.scroll_diff().1,
-        });
+        if let Some((camera_id, camera)) = self.camera.obtain_mut() {
+            camera.handle_input(CameraInput {
+                delta_x: self.input.mouse_diff().0 * dampening,
+                delta_y: self.input.mouse_diff().1 * dampening,
+                delta_scroll: self.input.scroll_diff().1,
+            });
 
-        self.cameras[self.camera_id].update_tranform(&mut self.transforms, self.camera_id);
+            camera.update_tranform(&mut self.transforms, *camera_id);
+        }
     }
 }
 

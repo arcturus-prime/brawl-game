@@ -72,6 +72,17 @@ pub struct CameraInput {
 }
 
 impl CameraData {
+    pub fn orbit(target_id: usize) -> Self {
+        Self {
+            mode: CameraMode::Orbit {
+                theta: 0.0,
+                azimuth: 0.0,
+                distance: 10.0,
+                target: target_id,
+            },
+            fov_y: 60.0,
+        }
+    }
     pub fn handle_input(&mut self, input: CameraInput) {
         if let CameraMode::Orbit {
             theta,
