@@ -1,10 +1,10 @@
 pub struct Ticker {
-    tick: u32,
+    pub tick: u32,
 
-    warp: f32,
-    step_size: f32,
+    pub warp: f32,
+    pub step_size: f32,
 
-    accumulator: f32,
+    pub accumulator: f32,
 }
 
 impl Default for Ticker {

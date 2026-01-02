@@ -1,6 +1,6 @@
 use shared::{
     math::{GeometryTree, Quaternion, Transform3, Vector3},
-    utility::SparseSet,
+    utility::{Entity, SparseSet},
 };
 use std::{error::Error, sync::Arc};
 use vulkano::{
@@ -40,14 +40,18 @@ pub enum CameraMode {
         theta: f32,
         azimuth: f32,
         distance: f32,
-        target: usize,
+        target: Entity,
     },
-    Fixed,
+    Fixed {
+        target: Entity,
+        offset: Transform3,
+    },
+    Freecam,
 }
 
 impl Default for CameraMode {
     fn default() -> Self {
-        Self::Fixed
+        Self::Freecam
     }
 }
 
@@ -97,7 +101,7 @@ impl CameraData {
         }
     }
 
-    pub fn update_tranform(&self, transforms: &mut SparseSet<Transform3>, id: usize) {
+    pub fn update_tranform(&self, transforms: &mut SparseSet<Transform3>, entity: Entity) {
         match self.mode {
             CameraMode::Orbit {
                 theta,
@@ -107,11 +111,14 @@ impl CameraData {
             } => {
                 let rotation = Quaternion::from_euler(0.0, azimuth, theta);
 
-                transforms[id].position =
+                transforms[entity].position =
                     transforms[target].position - rotation.rotate_vector(Vector3::X) * distance;
-                transforms[id].rotation = rotation
+                transforms[entity].rotation = rotation
             }
-            CameraMode::Fixed => {}
+            CameraMode::Fixed { target, offset } => {
+                transforms[entity] = transforms[target] * offset
+            }
+            CameraMode::Freecam => {}
         }
     }
 }

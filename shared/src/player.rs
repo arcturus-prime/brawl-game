@@ -31,5 +31,6 @@ impl PlayerInputState {
 
 #[derive(Default)]
 pub struct PlayerData {
-    name: String,
+    pub name: String,
+    pub inputs: BTreeMap<u32, PlayerInputState>,
 }

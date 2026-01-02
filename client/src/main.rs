@@ -1,12 +1,12 @@
 use std::{collections::BTreeMap, net::SocketAddr, str::FromStr, time::Instant};
 
 use shared::{
-    math::{GeometryTree, Transform3, Vector3},
+    math::{GeometryTree, Mesh, Transform3, Vector3},
     net::{Network, Packet},
     physics::{Moment, step_world},
     player::{PlayerData, PlayerInputState},
     tick::Ticker,
-    utility::{IdReserver, SingletonSet, SparseSet},
+    utility::{EntityReserver, SingletonSet, SparseSet},
 };
 use winit::{
     application::ApplicationHandler,
@@ -24,19 +24,18 @@ pub struct Game {
     pub input: WinitInputHelper,
     pub renderer: Renderer,
 
-    reserver: IdReserver,
-    network: Network,
-    last_update: Instant,
-    ticker: Ticker,
-
-    transforms: SparseSet<Transform3>,
+    players: SparseSet<PlayerData>,
+    local_player: SingletonSet<()>,
     colliders: SparseSet<GeometryTree>,
     momenta: SparseSet<Moment>,
+    transforms: SparseSet<Transform3>,
     renderable: SparseSet<Renderable>,
     camera: SingletonSet<CameraData>,
 
-    players: SparseSet<PlayerData>,
-    inputs: SingletonSet<BTreeMap<u32, PlayerInputState>>,
+    reserver: EntityReserver,
+    network: Network,
+    last_update: Instant,
+    ticker: Ticker,
 }
 
 pub struct App {
@@ -125,14 +124,14 @@ impl Game {
         Self {
             network,
             last_update: Instant::now(),
-            reserver: IdReserver::default(),
-            camera: SingletonSet::default(),
-            transforms: SparseSet::default(),
-            renderable: SparseSet::default(),
-            colliders: SparseSet::default(),
+            reserver: EntityReserver::default(),
             players: SparseSet::default(),
-            inputs: SingletonSet::default(),
+            local_player: SingletonSet::default(),
+            colliders: SparseSet::default(),
             momenta: SparseSet::default(),
+            renderable: SparseSet::default(),
+            transforms: SparseSet::default(),
+            camera: SingletonSet::default(),
             renderer,
             ticker: Ticker::default(),
             input: WinitInputHelper::new(),
@@ -140,16 +139,18 @@ impl Game {
     }
 
     pub fn render(&mut self) {
-        if let Some((id, camera)) = self.camera.obtain() {
-            self.renderer
-                .draw_scene(
-                    self.transforms[*id],
-                    camera.fov_y,
-                    &self.renderable,
-                    &self.transforms,
-                )
-                .unwrap();
-        }
+        let Some((camera_id, camera)) = self.camera.obtain() else {
+            return;
+        };
+
+        self.renderer
+            .draw_scene(
+                self.transforms[*camera_id],
+                camera.fov_y,
+                &self.renderable,
+                &self.transforms,
+            )
+            .unwrap();
     }
 
     pub fn update(&mut self) {
@@ -159,45 +160,64 @@ impl Game {
 
         while let Ok((_, packet)) = self.network.receive(&mut self.reserver) {
             match packet {
-                shared::net::Packet::ClientHello => {
+                Packet::ClientHello => {
                     eprintln!("Got unexpected ClientHello from server");
                 }
-                shared::net::Packet::PlayerJoin { id, is_you } => {
-                    let id = self.network.reserve_real_entity(&mut self.reserver, id);
+                Packet::PlayerJoin { net_entity, is_you } => {
+                    let entity = self
+                        .network
+                        .reserve_real_entity(&mut self.reserver, net_entity);
 
-                    self.transforms.insert(id, Transform3::identity());
-                    self.momenta.insert(id, Moment::new(5.0));
-                    self.players.insert(id, PlayerData::default());
+                    let collider = GeometryTree::load_from_mesh(&Mesh::create_cube_mesh());
 
-                    let tree = GeometryTree::from_cube(1.0, 1.0, 1.0, 0);
+                    self.transforms.insert(entity, Transform3::identity());
+                    self.momenta.insert(entity, Moment::new(5.0));
+
                     let mut renderable = self.renderer.create_renderable().unwrap();
-                    renderable.set_nodes(&tree).unwrap();
 
-                    self.renderable.insert(id, renderable);
-                    self.colliders.insert(id, tree);
+                    renderable.set_nodes(&collider).unwrap();
+
+                    self.colliders.insert(entity, collider);
+                    self.renderable.insert(entity, renderable);
+                    self.players.insert(entity, PlayerData::default());
 
                     if is_you {
-                        self.inputs.insert(id, BTreeMap::new());
+                        let camera_entity = self.reserver.reserve();
 
-                        let camera_id = self.reserver.reserve();
+                        self.camera.insert(camera_entity, CameraData::orbit(entity));
+                        self.transforms
+                            .insert(camera_entity, Transform3::identity());
 
-                        self.transforms.insert(camera_id, Transform3::identity());
-                        self.camera.insert(camera_id, CameraData::orbit(id));
+                        self.local_player.insert(entity, ());
                     }
                 }
-                shared::net::Packet::PlayerLeave { id } => todo!(),
-                shared::net::Packet::PlayerInput { input } => todo!(),
-                shared::net::Packet::PlayerMovement {
+                Packet::PlayerLeave { net_entity: id } => {}
+                Packet::PlayerInput { input, tick } => {
+                    eprintln!("Received unexpected player input packet from server");
+                }
+                Packet::PlayerMovement {
                     transform,
                     velocity,
-                    id,
-                } => todo!(),
+                    net_entity,
+                } => {
+                    let Some(real_id) = self.network.get_real_entity(net_entity) else {
+                        eprintln!("Received player id from server that is not yet registered");
+                        continue;
+                    };
+
+                    self.transforms[*real_id] = transform;
+                    self.momenta[*real_id].velocity = velocity;
+                }
+                Packet::TickSync { skip } => {
+                    self.ticker.set_tick(skip + 1);
+                }
             }
         }
 
         self.ticker.update(dt, |tick, dt| {
-            if let Some((inputs_id, inputs)) = self.inputs.obtain_mut()
-                && let Some((camera_id, camera)) = self.camera.obtain()
+            if let Some((local_player_entity, _)) = self.local_player.obtain()
+                && let Some((camera_id, _)) = self.camera.obtain()
+                && let Some(data) = self.players.get_mut(*local_player_entity)
             {
                 let camera_tranform = self.transforms[*camera_id];
                 let mut move_direction = Vector3::zero();
@@ -225,11 +245,18 @@ impl Game {
                 };
 
                 input.apply(
-                    &mut self.momenta[*inputs_id],
-                    &mut self.transforms[*inputs_id],
+                    &mut self.momenta[*local_player_entity],
+                    &mut self.transforms[*local_player_entity],
                 );
 
-                inputs.insert(tick, input);
+                self.network
+                    .send_all(Packet::PlayerInput {
+                        input: input.clone(),
+                        tick,
+                    })
+                    .unwrap();
+
+                data.inputs.insert(tick, input);
             }
 
             step_world(&self.colliders, &mut self.momenta, &mut self.transforms, dt);

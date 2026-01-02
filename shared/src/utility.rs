@@ -9,10 +9,13 @@ use thiserror::Error;
 
 use crate::math::{Quaternion, Transform3, Vector3};
 
+pub type Entity = usize;
+pub const NULL_ENTITY: Entity = usize::MAX;
+
 #[derive(Clone)]
 pub struct SparseSet<T> {
-    id_to_index: Vec<usize>,
-    index_to_id: Vec<usize>,
+    entity_to_index: Vec<usize>,
+    index_to_entity: Vec<Entity>,
 
     data: Vec<T>,
 }
@@ -20,34 +23,33 @@ pub struct SparseSet<T> {
 impl<T> Default for SparseSet<T> {
     fn default() -> Self {
         Self {
-            id_to_index: Default::default(),
-            index_to_id: Default::default(),
+            entity_to_index: Default::default(),
+            index_to_entity: Default::default(),
             data: Default::default(),
         }
     }
 }
 
 impl<T> SparseSet<T> {
-    pub fn insert(&mut self, id: usize, data: T) {
-        self.id_to_index.resize(id + 1, usize::MAX);
+    pub fn insert(&mut self, entity: Entity, data: T) {
+        self.entity_to_index.resize(entity + 1, usize::MAX);
 
-        let index = self.index_to_id.len();
-        self.id_to_index[id] = index;
+        let index = self.index_to_entity.len();
+        self.entity_to_index[entity] = index;
 
-        self.index_to_id.push(id);
+        self.index_to_entity.push(entity);
         self.data.push(data);
     }
 
-    pub fn delete(&mut self, id: usize) -> usize {
-        let index = self.id_to_index[id];
-        let replacement_index = self.index_to_id.len() - 1;
+    pub fn delete(&mut self, entity: Entity) {
+        let index = self.entity_to_index[entity];
+        let replacement_index = self.index_to_entity.len() - 1;
 
         if let Some(last) = self.data.pop() {
             self.data[index] = last;
         }
-
-        self.id_to_index[self.index_to_id[replacement_index]] = index;
-        index
+        self.entity_to_index[entity] = usize::MAX;
+        self.entity_to_index[self.index_to_entity[replacement_index]] = index;
     }
 
     pub fn iter<'a>(&'a self) -> SparseSetIter<'a, T> {
@@ -58,55 +60,62 @@ impl<T> SparseSet<T> {
         SparseSetIterMut::new(self)
     }
 
-    pub fn get(&self, id: usize) -> Option<&T> {
-        if id >= self.id_to_index.len() || self.id_to_index[id] == usize::MAX {
+    pub fn get(&self, entity: Entity) -> Option<&T> {
+        if entity >= self.entity_to_index.len() || self.entity_to_index[entity] == usize::MAX {
             return None;
         }
 
-        Some(&self.data[self.id_to_index[id]])
+        Some(&self.data[self.entity_to_index[entity]])
     }
 
-    pub fn get_mut(&mut self, id: usize) -> Option<&mut T> {
-        if id >= self.id_to_index.len() || self.id_to_index[id] == usize::MAX {
+    pub fn get_mut(&mut self, entity: Entity) -> Option<&mut T> {
+        if entity >= self.entity_to_index.len() || self.entity_to_index[entity] == usize::MAX {
             return None;
         }
 
-        Some(&mut self.data[self.id_to_index[id]])
+        Some(&mut self.data[self.entity_to_index[entity]])
     }
 
     pub fn len(&self) -> usize {
         self.data.len()
     }
-}
 
-impl<T> Index<usize> for SparseSet<T> {
-    type Output = T;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.data[self.id_to_index[index]]
+    pub fn is_emtpy(&self) -> bool {
+        self.data.is_empty()
     }
 }
 
-impl<T> IndexMut<usize> for SparseSet<T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.data[self.id_to_index[index]]
+impl<T> Index<Entity> for SparseSet<T> {
+    type Output = T;
+
+    fn index(&self, entity: Entity) -> &Self::Output {
+        &self.data[self.entity_to_index[entity]]
+    }
+}
+
+impl<T> IndexMut<Entity> for SparseSet<T> {
+    fn index_mut(&mut self, entity: Entity) -> &mut Self::Output {
+        &mut self.data[self.entity_to_index[entity]]
     }
 }
 
 pub struct SparseSetIter<'a, T> {
-    iter: Zip<Iter<'a, usize>, Iter<'a, T>>,
+    iter: Zip<Iter<'a, Entity>, Iter<'a, T>>,
 }
 
 impl<'a, T> SparseSetIter<'a, T> {
     pub fn new(spares_set: &'a SparseSet<T>) -> Self {
         Self {
-            iter: spares_set.index_to_id.iter().zip(spares_set.data.iter()),
+            iter: spares_set
+                .index_to_entity
+                .iter()
+                .zip(spares_set.data.iter()),
         }
     }
 }
 
 impl<'a, T> Iterator for SparseSetIter<'a, T> {
-    type Item = (&'a usize, &'a T);
+    type Item = (&'a Entity, &'a T);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
@@ -114,14 +123,14 @@ impl<'a, T> Iterator for SparseSetIter<'a, T> {
 }
 
 pub struct SparseSetIterMut<'a, T> {
-    iter: Zip<Iter<'a, usize>, IterMut<'a, T>>,
+    iter: Zip<Iter<'a, Entity>, IterMut<'a, T>>,
 }
 
 impl<'a, T> SparseSetIterMut<'a, T> {
     pub fn new(spares_set: &'a mut SparseSet<T>) -> Self {
         Self {
             iter: spares_set
-                .index_to_id
+                .index_to_entity
                 .iter()
                 .zip(spares_set.data.iter_mut()),
         }
@@ -129,7 +138,7 @@ impl<'a, T> SparseSetIterMut<'a, T> {
 }
 
 impl<'a, T> Iterator for SparseSetIterMut<'a, T> {
-    type Item = (&'a usize, &'a mut T);
+    type Item = (&'a Entity, &'a mut T);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.next()
@@ -137,96 +146,100 @@ impl<'a, T> Iterator for SparseSetIterMut<'a, T> {
 }
 
 #[derive(Default)]
-pub struct IdReserver {
-    id: usize,
-    deleted: Vec<usize>,
+pub struct EntityReserver {
+    entity: Entity,
+    deleted: Vec<Entity>,
 }
 
-impl IdReserver {
-    pub fn reserve(&mut self) -> usize {
-        if let Some(id) = self.deleted.pop() {
-            return id;
+impl EntityReserver {
+    pub fn reserve(&mut self) -> Entity {
+        if let Some(entity) = self.deleted.pop() {
+            return entity;
         }
 
-        let id = self.id;
-        self.id += 1;
+        let entity = self.entity;
+        self.entity += 1;
 
-        id
+        entity
     }
 
-    pub fn delete(&mut self, id: usize) {
-        self.deleted.push(id);
+    pub fn delete(&mut self, entity: Entity) {
+        self.deleted.push(entity);
     }
 }
 
 #[derive(Default)]
-pub struct SingletonSet<T>(Option<(usize, T)>);
+pub struct SingletonSet<T>(Option<(Entity, T)>);
 
 impl<T> SingletonSet<T> {
-    pub fn get(&self, id: usize) -> Option<&T> {
-        let Some((valid_id, component)) = &self.0 else {
+    pub fn get(&self, entity: Entity) -> Option<&T> {
+        let Some((valid_entity, component)) = &self.0 else {
             return None;
         };
 
-        if id == *valid_id {
+        if entity == *valid_entity {
             return Some(component);
         }
 
         None
     }
 
-    pub fn get_mut(&mut self, id: usize) -> Option<&mut T> {
-        let Some((valid_id, component)) = &mut self.0 else {
+    pub fn get_mut(&mut self, entity: Entity) -> Option<&mut T> {
+        let Some((valid_entity, component)) = &mut self.0 else {
             return None;
         };
 
-        if id == *valid_id {
+        if entity == *valid_entity {
             return Some(component);
         }
 
         None
     }
 
-    pub fn insert(&mut self, id: usize, data: T) {
-        self.0 = Some((id, data))
+    pub fn insert(&mut self, entity: Entity, data: T) {
+        self.0 = Some((entity, data))
     }
 
-    pub fn obtain(&self) -> Option<(&usize, &T)> {
-        let Some((id, component)) = self.0.as_ref() else {
+    pub fn obtain(&self) -> Option<(&Entity, &T)> {
+        let Some((entity, component)) = self.0.as_ref() else {
             return None;
         };
 
-        Some((id, component))
+        Some((entity, component))
     }
 
-    pub fn obtain_mut(&mut self) -> Option<(&usize, &mut T)> {
-        let Some((id, component)) = self.0.as_mut() else {
+    pub fn obtain_mut(&mut self) -> Option<(&Entity, &mut T)> {
+        let Some((entity, component)) = self.0.as_mut() else {
             return None;
         };
 
-        Some((id, component))
+        Some((entity, component))
     }
 
-    pub fn unwrap(&self) -> (&usize, &T) {
-        let (id, component) = self.0.as_ref().unwrap();
+    pub fn unwrap(&self) -> (&Entity, &T) {
+        let (entity, component) = self.0.as_ref().unwrap();
 
-        (id, component)
+        (entity, component)
     }
 
-    pub fn unwrap_mut(&mut self) -> (&usize, &mut T) {
-        let (id, component) = self.0.as_mut().unwrap();
+    pub fn unwrap_mut(&mut self) -> (&Entity, &mut T) {
+        let (entity, component) = self.0.as_mut().unwrap();
 
-        (id, component)
+        (entity, component)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_none()
     }
 }
 
-impl<T> Index<usize> for SingletonSet<T> {
+impl<T> Index<Entity> for SingletonSet<T> {
     type Output = T;
 
-    fn index(&self, index: usize) -> &Self::Output {
-        let (id, component) = self.0.as_ref().unwrap();
+    fn index(&self, entity: Entity) -> &Self::Output {
+        let (real_entity, component) = self.0.as_ref().unwrap();
 
-        if *id != index {
+        if *real_entity != entity {
             panic!("Id does not match");
         }
 
@@ -234,11 +247,11 @@ impl<T> Index<usize> for SingletonSet<T> {
     }
 }
 
-impl<T> IndexMut<usize> for SingletonSet<T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        let (id, component) = self.0.as_mut().unwrap();
+impl<T> IndexMut<Entity> for SingletonSet<T> {
+    fn index_mut(&mut self, entity: Entity) -> &mut Self::Output {
+        let (real_entity, component) = self.0.as_mut().unwrap();
 
-        if *id != index {
+        if *real_entity != entity {
             panic!("Id does not match");
         }
 

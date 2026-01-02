@@ -1,10 +1,11 @@
 use std::{
-    f32::{self, EPSILON, NAN},
+    f32::{self, EPSILON, NAN, NEG_INFINITY},
     f64::INFINITY,
     ops::{
         Add, AddAssign, ControlFlow, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub,
         SubAssign,
     },
+    sync::PoisonError,
     task::Poll,
 };
 
@@ -878,19 +879,13 @@ impl MulAssign for Transform3 {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RaycastData {
+    pub contents: HalfspaceContents,
     pub position: Vector3,
     pub normal: Vector3,
     pub t: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ContactData {
-    pub point: Vector3,
-    pub normal: Vector3,
-    pub penetration: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct HalfspaceContents(pub u32);
 
 impl HalfspaceContents {
@@ -943,7 +938,7 @@ impl HalfspaceContents {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Halfspace {
     pub plane: Plane3,
     pub negative: HalfspaceContents,
@@ -968,7 +963,7 @@ impl Halfspace {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GeometryTree {
     nodes: Vec<Halfspace>,
     bounds: BoundingBox3,
@@ -1151,6 +1146,7 @@ impl GeometryTree {
                 && let Some(normal) = normal
             {
                 return Some(RaycastData {
+                    contents: contents,
                     position: origin + dir * t_min,
                     normal,
                     t: t_min,
@@ -1291,7 +1287,7 @@ impl GeometryTree {
                         self.nodes[contents.get_index().unwrap() as usize].clone()
                     };
 
-                    let class = node.plane.classify_aabb(&bounds);
+                    let class = node.plane.classify_aabb(&intersection);
 
                     if class == PlaneSide::Positive {
                         stack.push(Command::PopContraint);
@@ -1336,20 +1332,16 @@ impl GeometryTree {
     }
 
     /// Perform a point containment test against the BSP
-    pub fn contains(&self, point: Vector3) -> bool {
+    pub fn point_query(&self, point: Vector3) -> HalfspaceContents {
         if self.nodes.is_empty() {
-            return false;
+            return HalfspaceContents::empty();
         }
 
         let mut contents = HalfspaceContents::index(0);
 
         loop {
-            if contents.is_solid() {
-                return true;
-            }
-
-            if contents.is_empty() {
-                return false;
+            if !contents.is_index() {
+                return contents;
             }
 
             let node = &self.nodes[contents.get_index().unwrap() as usize];
@@ -1365,5 +1357,181 @@ impl GeometryTree {
     /// Simplify infeasible regions and unreachable plane nodes
     pub fn simplify(&mut self) {
         todo!();
+    }
+
+    pub fn load_from_mesh(mesh: &Mesh) -> Self {
+        let mut tree = GeometryTree {
+            nodes: vec![Halfspace {
+                plane: Plane3::new(Vector3::X, 0.0),
+                positive: HalfspaceContents::solid(0),
+                negative: HalfspaceContents::solid(0),
+            }],
+            bounds: mesh.get_bounding_box(),
+        };
+
+        let mut stack = vec![];
+        let mut face_index = 0;
+        while face_index < mesh.faces.len() {
+            stack.push((
+                face_index,
+                HalfspaceContents::index(0),
+                HalfspaceContents::index(0),
+            ));
+
+            face_index += mesh.faces[face_index] + 1;
+        }
+
+        while let Some((face_index, last_contents, contents)) = stack.pop() {
+            if !contents.is_index() {
+                let new_contents = HalfspaceContents::index(tree.nodes.len() as u32);
+                let plane = mesh.calculate_face_plane(face_index);
+
+                tree.nodes.push(Halfspace {
+                    plane,
+                    negative: contents,
+                    positive: HalfspaceContents::empty(),
+                });
+
+                let node = &mut tree.nodes[last_contents.get_index().unwrap() as usize];
+
+                match mesh.classify_face_with_plane(&plane, face_index) {
+                    PlaneSide::Positive => node.positive = new_contents,
+                    PlaneSide::Negative => node.negative = new_contents,
+                    PlaneSide::Both => {
+                        node.positive = new_contents;
+                        node.negative = new_contents;
+                    }
+                }
+
+                continue;
+            }
+
+            let node = &tree.nodes[contents.get_index().unwrap() as usize];
+            let side = mesh.classify_face_with_plane(&node.plane, face_index);
+
+            match side {
+                PlaneSide::Positive => stack.push((face_index, contents, node.positive)),
+                PlaneSide::Negative => stack.push((face_index, contents, node.negative)),
+                PlaneSide::Both => {
+                    stack.push((face_index, contents, node.positive));
+                    stack.push((face_index, contents, node.negative));
+                }
+            }
+        }
+
+        tree
+    }
+}
+
+pub struct Mesh {
+    pub normals: Vec<Vector3>,
+    pub vertices: Vec<Vector3>,
+    pub faces: Vec<usize>,
+}
+
+impl Mesh {
+    pub fn get_bounding_box(&self) -> BoundingBox3 {
+        let mut bounds = BoundingBox3::new(
+            Vector3::one() * f32::INFINITY,
+            Vector3::one() * f32::NEG_INFINITY,
+        );
+
+        for vertex in &self.vertices {
+            bounds.min = Vector3::new(
+                vertex.x.min(bounds.min.x),
+                vertex.y.min(bounds.min.y),
+                vertex.z.min(bounds.min.z),
+            );
+            bounds.max = Vector3::new(
+                vertex.x.max(bounds.max.x),
+                vertex.y.max(bounds.max.y),
+                vertex.z.max(bounds.max.z),
+            );
+        }
+
+        bounds
+    }
+
+    pub fn classify_face_with_plane(&self, plane: &Plane3, face_index: usize) -> PlaneSide {
+        let length = self.faces[face_index];
+        let vertex_indices = &self.faces[face_index + 1..face_index + 1 + length];
+
+        let mut positive = false;
+        let mut negative = false;
+
+        for i in vertex_indices {
+            if plane.distance_to_point(self.vertices[*i]) >= 0.0 {
+                positive = true
+            } else {
+                negative = true;
+            }
+        }
+
+        match (positive, negative) {
+            (true, false) => PlaneSide::Positive,
+            (false, true) => PlaneSide::Negative,
+            _ => PlaneSide::Both,
+        }
+    }
+
+    pub fn calculate_face_plane(&self, face_index: usize) -> Plane3 {
+        let length = self.faces[face_index];
+        let vertex_indices = &self.faces[face_index + 1..face_index + 1 + length];
+
+        let mut normal = Vector3::zero();
+        for i in vertex_indices {
+            normal += self.normals[*i];
+        }
+
+        normal /= vertex_indices.len() as f32;
+        normal = normal.normalize();
+
+        let mut distance = 0.0;
+        for i in vertex_indices {
+            distance += normal.dot(self.vertices[*i]);
+        }
+
+        distance /= vertex_indices.len() as f32;
+
+        Plane3::new(normal, distance)
+    }
+
+    pub fn create_cube_mesh() -> Mesh {
+        let vertices = vec![
+            Vector3::new(-0.5, -0.5, -0.5), // 0: left-bottom-back
+            Vector3::new(0.5, -0.5, -0.5),  // 1: right-bottom-back
+            Vector3::new(0.5, 0.5, -0.5),   // 2: right-top-back
+            Vector3::new(-0.5, 0.5, -0.5),  // 3: left-top-back
+            Vector3::new(-0.5, -0.5, 0.5),  // 4: left-bottom-front
+            Vector3::new(0.5, -0.5, 0.5),   // 5: right-bottom-front
+            Vector3::new(0.5, 0.5, 0.5),    // 6: right-top-front
+            Vector3::new(-0.5, 0.5, 0.5),   // 7: left-top-front
+        ];
+
+        let normals = vec![
+            Vector3::new(-0.5, -0.5, -0.5).normalize(),
+            Vector3::new(0.5, -0.5, -0.5).normalize(),
+            Vector3::new(0.5, 0.5, -0.5).normalize(),
+            Vector3::new(-0.5, 0.5, -0.5).normalize(),
+            Vector3::new(-0.5, -0.5, 0.5).normalize(),
+            Vector3::new(0.5, -0.5, 0.5).normalize(),
+            Vector3::new(0.5, 0.5, 0.5).normalize(),
+            Vector3::new(-0.5, 0.5, 0.5).normalize(),
+        ];
+
+        let faces = vec![
+            4, 0, 1, 2, 3, // Front face (normal 1)
+            4, 4, 5, 6, 7, // Left face (normal 2)
+            4, 0, 3, 7, 4, // Right face (normal 3)
+            4, 1, 5, 6, 2, // Bottom face (normal 4)
+            4, 0, 4, 5, 1, // Top face (normal 5)
+            4, 3, 2, 6, 7,
+        ];
+
+        Mesh {
+            normals,
+            vertices,
+            faces,
+        }
     }
 }

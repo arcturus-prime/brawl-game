@@ -9,22 +9,21 @@ use std::{
 use shared::{
     math::{GeometryTree, Transform3},
     net::{Network, NetworkError, Packet},
-    physics::Moment,
+    physics::{Moment, step_world},
     player::{PlayerData, PlayerInputState},
     tick::Ticker,
-    utility::{IdReserver, SparseSet},
+    utility::{EntityReserver, SparseSet},
 };
 
 pub struct Game {
-    transforms: SparseSet<Transform3>,
+    players: SparseSet<PlayerData>,
     colliders: SparseSet<GeometryTree>,
     momenta: SparseSet<Moment>,
-    inputs: SparseSet<BTreeMap<u32, PlayerInputState>>,
-    players: SparseSet<PlayerData>,
+    transforms: SparseSet<Transform3>,
 
-    last_update: Instant,
     network: Network,
-    reserver: IdReserver,
+    last_update: Instant,
+    reserver: EntityReserver,
     ticker: Ticker,
 }
 
@@ -34,66 +33,112 @@ impl Game {
         let dt = (new_update_time - self.last_update).as_secs_f32();
         self.last_update = new_update_time;
 
-        while let Ok((client_id, packet)) = self.network.receive(&mut self.reserver) {
+        while let Ok((client_entity, packet)) = self.network.receive(&mut self.reserver) {
             match packet {
-                shared::net::Packet::ClientHello => {
-                    self.players.insert(client_id, PlayerData::default());
-                    self.inputs.insert(client_id, BTreeMap::new());
-                    self.transforms.insert(client_id, Transform3::identity());
-                    self.momenta.insert(client_id, Moment::new(5.0));
+                Packet::ClientHello => {
+                    let collider = GeometryTree::from_cube(1.0, 1.0, 1.0, 0);
 
-                    let tree = GeometryTree::from_cube(1.0, 1.0, 1.0, 0);
-                    self.colliders.insert(client_id, tree);
+                    self.transforms
+                        .insert(client_entity, Transform3::identity());
+                    self.momenta.insert(client_entity, Moment::new(5.0));
+                    self.colliders.insert(client_entity, collider);
+                    self.players.insert(client_entity, PlayerData::default());
 
-                    let net_id = self.network.reserve_network_entity(client_id);
+                    let net_entity = self.network.reserve_network_entity(client_entity);
+
+                    self.network
+                        .send(
+                            client_entity,
+                            Packet::TickSync {
+                                skip: self.ticker.tick,
+                            },
+                        )
+                        .unwrap();
 
                     self.network
                         .send_all_except(
-                            client_id,
+                            client_entity,
                             Packet::PlayerJoin {
-                                id: net_id,
+                                net_entity,
                                 is_you: false,
                             },
                         )
                         .unwrap();
 
-                    self.network
-                        .send(
-                            client_id,
-                            Packet::PlayerJoin {
-                                id: net_id,
-                                is_you: true,
-                            },
-                        )
-                        .unwrap();
+                    for x in self.network.get_clients() {
+                        let net_entity = self.network.get_network_entity(x).unwrap();
+
+                        self.network
+                            .send(
+                                client_entity,
+                                Packet::PlayerJoin {
+                                    net_entity: *net_entity,
+                                    is_you: x == client_entity,
+                                },
+                            )
+                            .unwrap();
+                    }
                 }
-                shared::net::Packet::PlayerJoin { id, is_you } => {
+                Packet::PlayerJoin {
+                    net_entity: id,
+                    is_you,
+                } => {
                     eprintln!("Unexpected player join packet received");
                 }
-                shared::net::Packet::PlayerLeave { id } => {
+                Packet::PlayerLeave { net_entity: id } => {
                     eprintln!("Unexpected player leave packet received");
                 }
-                shared::net::Packet::PlayerInput { input } => {}
-                shared::net::Packet::PlayerMovement {
+                Packet::PlayerInput { input, tick } => {
+                    self.players[client_entity].inputs.insert(tick, input);
+                }
+                Packet::PlayerMovement {
                     transform,
                     velocity,
-                    id,
-                } => todo!(),
+                    net_entity: id,
+                } => {
+                    eprintln!("Unexpected player movement packet received")
+                }
+                Packet::TickSync { skip } => {
+                    eprintln!("Unexpected tick sync packet received");
+                }
             }
         }
 
-        self.ticker.update(dt, |tick, dt| {})
+        self.ticker.update(dt, |tick, dt| {
+            for (id, data) in self.players.iter_mut() {
+                let Some(mut current_input) = data.inputs.remove(&tick) else {
+                    continue;
+                };
+
+                current_input.apply(&mut self.momenta[*id], &mut self.transforms[*id]);
+            }
+
+            step_world(&self.colliders, &mut self.momenta, &mut self.transforms, dt);
+
+            for (entity, data) in self.players.iter() {
+                let Some(net_entity) = self.network.get_network_entity(*entity) else {
+                    continue;
+                };
+
+                self.network
+                    .send_all(Packet::PlayerMovement {
+                        transform: self.transforms[*entity],
+                        velocity: self.momenta[*entity].velocity,
+                        net_entity: *net_entity,
+                    })
+                    .unwrap()
+            }
+        })
     }
 
     pub fn host(address: SocketAddr) -> Result<Self, NetworkError> {
         Ok(Self {
             last_update: Instant::now(),
-            transforms: SparseSet::default(),
-            inputs: SparseSet::default(),
-            players: SparseSet::default(),
             colliders: SparseSet::default(),
             momenta: SparseSet::default(),
-            reserver: IdReserver::default(),
+            transforms: SparseSet::default(),
+            players: SparseSet::default(),
+            reserver: EntityReserver::default(),
             network: Network::new(address)?,
             ticker: Ticker::default(),
         })

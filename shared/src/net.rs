@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    hash::Hash,
     io,
     net::{SocketAddr, SocketAddrV4, UdpSocket},
     sync::mpsc::{Receiver, SendError, Sender, TryRecvError, TrySendError},
@@ -12,7 +11,7 @@ use thiserror::Error;
 use crate::{
     math::{Transform3, Vector3},
     player::PlayerInputState,
-    utility::{ByteStream, ByteStreamError, IdReserver, SparseSet},
+    utility::{ByteStream, ByteStreamError, Entity, EntityReserver, SparseSet},
 };
 
 #[discriminant(u8)]
@@ -20,20 +19,24 @@ use crate::{
 pub enum Packet {
     ClientHello = 0,
     PlayerJoin {
-        id: usize,
+        net_entity: usize,
         is_you: bool,
     } = 1,
     PlayerLeave {
-        id: usize,
+        net_entity: usize,
     } = 2,
     PlayerInput {
         input: PlayerInputState,
+        tick: u32,
     } = 3,
     PlayerMovement {
         transform: Transform3,
         velocity: Vector3,
-        id: usize,
+        net_entity: usize,
     } = 4,
+    TickSync {
+        skip: u32,
+    } = 5,
 }
 
 #[derive(Debug, Error)]
@@ -59,23 +62,30 @@ impl Packet {
             Packet::PlayerMovement {
                 transform,
                 velocity,
-                id,
+                net_entity: id,
             } => {
                 stream.write_u64(id as u64)?;
                 stream.write_transform3(transform)?;
                 stream.write_vec3(velocity)?;
             }
-            Packet::PlayerInput { input } => {
+            Packet::PlayerInput { input, tick } => {
                 stream.write_vec3(input.look_direction)?;
                 stream.write_vec3(input.want_direction)?;
                 stream.write_f32(input.throttle)?;
+                stream.write_u32(tick)?;
             }
-            Packet::PlayerJoin { id, is_you } => {
+            Packet::PlayerJoin {
+                net_entity: id,
+                is_you,
+            } => {
                 stream.write_u64(id as u64)?;
                 stream.write_u8(is_you as u8)?;
             }
-            Packet::PlayerLeave { id } => {
+            Packet::PlayerLeave { net_entity: id } => {
                 stream.write_u64(id as u64)?;
+            }
+            Packet::TickSync { skip } => {
+                stream.write_u32(skip)?;
             }
         };
 
@@ -88,11 +98,11 @@ impl Packet {
         Ok(match id {
             0 => Packet::ClientHello,
             1 => Packet::PlayerJoin {
-                id: stream.read_u64()? as usize,
+                net_entity: stream.read_u64()? as usize,
                 is_you: stream.read_u8()? == 1,
             },
             2 => Self::PlayerLeave {
-                id: stream.read_u64()? as usize,
+                net_entity: stream.read_u64()? as usize,
             },
             3 => Self::PlayerInput {
                 input: PlayerInputState {
@@ -100,11 +110,15 @@ impl Packet {
                     want_direction: stream.read_vec3()?,
                     throttle: stream.read_f32()?,
                 },
+                tick: stream.read_u32()?,
             },
             4 => Self::PlayerMovement {
-                id: stream.read_u64()? as usize,
+                net_entity: stream.read_u64()? as usize,
                 transform: stream.read_transform3()?,
                 velocity: stream.read_vec3()?,
+            },
+            5 => Self::TickSync {
+                skip: stream.read_u32()?,
             },
             _ => return Err(NetworkError::InvalidPacketId),
         })
@@ -115,12 +129,12 @@ pub struct Network {
     tx: Sender<(SocketAddr, Packet)>,
     rx: Receiver<(SocketAddr, Packet)>,
 
-    registered_addresses: SparseSet<SocketAddr>,
-    registered_entities: HashMap<SocketAddr, usize>,
+    client_addresses: SparseSet<SocketAddr>,
+    client_entities: HashMap<SocketAddr, Entity>,
 
-    entity_to_network: SparseSet<usize>,
-    network_to_entity: SparseSet<usize>,
-    network_reserver: IdReserver,
+    entity_to_network: SparseSet<Entity>,
+    network_to_entity: SparseSet<Entity>,
+    network_reserver: EntityReserver,
 }
 
 impl Network {
@@ -179,31 +193,34 @@ impl Network {
         Ok(Self {
             tx: send_tx,
             rx: receive_rx,
-            registered_addresses: SparseSet::default(),
-            registered_entities: HashMap::new(),
+            client_addresses: SparseSet::default(),
+            client_entities: HashMap::new(),
             entity_to_network: SparseSet::default(),
-            network_reserver: IdReserver::default(),
+            network_reserver: EntityReserver::default(),
             network_to_entity: SparseSet::default(),
         })
     }
 
-    pub fn receive(&mut self, reserver: &mut IdReserver) -> Result<(usize, Packet), NetworkError> {
+    pub fn receive(
+        &mut self,
+        reserver: &mut EntityReserver,
+    ) -> Result<(Entity, Packet), NetworkError> {
         let (address, packet) = self.rx.try_recv()?;
 
-        if !self.registered_entities.contains_key(&address) {
+        if !self.client_entities.contains_key(&address) {
             let id = reserver.reserve();
 
-            self.registered_entities.insert(address, id);
-            self.registered_addresses.insert(id, address);
+            self.client_entities.insert(address, id);
+            self.client_addresses.insert(id, address);
         }
 
-        let id = self.registered_entities[&address];
+        let entity = self.client_entities[&address];
 
-        Ok((id, packet))
+        Ok((entity, packet))
     }
 
-    pub fn send(&mut self, entity: usize, packet: Packet) -> Result<(), NetworkError> {
-        let address = self.registered_addresses[entity];
+    pub fn send(&mut self, entity: Entity, packet: Packet) -> Result<(), NetworkError> {
+        let address = self.client_addresses[entity];
 
         self.tx.send((address, packet))?;
 
@@ -211,16 +228,16 @@ impl Network {
     }
 
     pub fn send_all(&mut self, packet: Packet) -> Result<(), NetworkError> {
-        for (_, address) in self.registered_addresses.iter() {
+        for (_, address) in self.client_addresses.iter() {
             self.tx.send((*address, packet.clone()))?;
         }
 
         Ok(())
     }
 
-    pub fn send_all_except(&mut self, except: usize, packet: Packet) -> Result<(), NetworkError> {
-        for (id, address) in self.registered_addresses.iter() {
-            if *id == except {
+    pub fn send_all_except(&mut self, except: Entity, packet: Packet) -> Result<(), NetworkError> {
+        for (entity, address) in self.client_addresses.iter() {
+            if *entity == except {
                 continue;
             }
 
@@ -230,67 +247,71 @@ impl Network {
         Ok(())
     }
 
-    pub fn add_client(&mut self, address: SocketAddr, reserver: &mut IdReserver) -> usize {
-        if !self.registered_entities.contains_key(&address) {
+    pub fn get_clients(&self) -> Vec<Entity> {
+        self.client_addresses.iter().map(|i| *i.0).collect()
+    }
+
+    pub fn add_client(&mut self, address: SocketAddr, reserver: &mut EntityReserver) -> Entity {
+        if !self.client_entities.contains_key(&address) {
             let id = reserver.reserve();
 
-            self.registered_entities.insert(address, id);
-            self.registered_addresses.insert(id, address);
+            self.client_entities.insert(address, id);
+            self.client_addresses.insert(id, address);
         }
 
-        let id = self.registered_entities[&address];
+        let id = self.client_entities[&address];
 
         id
     }
 
-    pub fn delete_client(&mut self, entity: usize) {
-        let address = self.registered_addresses[entity];
+    pub fn delete_client(&mut self, entity: Entity) {
+        let address = self.client_addresses[entity];
 
-        self.registered_addresses.delete(entity);
-        self.registered_entities.remove(&address);
+        self.client_addresses.delete(entity);
+        self.client_entities.remove(&address);
     }
 
     pub fn reserve_real_entity(
         &mut self,
-        reserver: &mut IdReserver,
-        network_entity: usize,
-    ) -> usize {
-        let id = reserver.reserve();
+        reserver: &mut EntityReserver,
+        network_entity: Entity,
+    ) -> Entity {
+        let entity = reserver.reserve();
 
-        self.entity_to_network.insert(id, network_entity);
-        self.network_to_entity.insert(network_entity, id);
+        self.entity_to_network.insert(entity, network_entity);
+        self.network_to_entity.insert(network_entity, entity);
 
-        id
+        entity
     }
 
-    pub fn reserve_network_entity(&mut self, real_entity: usize) -> usize {
-        let network_id = self.network_reserver.reserve();
+    pub fn reserve_network_entity(&mut self, real_entity: Entity) -> Entity {
+        let network_entity = self.network_reserver.reserve();
 
-        self.entity_to_network.insert(real_entity, network_id);
-        self.network_to_entity.insert(network_id, real_entity);
+        self.entity_to_network.insert(real_entity, network_entity);
+        self.network_to_entity.insert(network_entity, real_entity);
 
-        network_id
+        network_entity
     }
 
-    pub fn delete_real_entity(&mut self, entity: usize) {
-        let network_id = self.entity_to_network[entity];
+    pub fn delete_from_real_entity(&mut self, entity: Entity) {
+        let network_entity = self.entity_to_network[entity];
 
         self.entity_to_network.delete(entity);
-        self.network_to_entity.delete(network_id);
+        self.network_to_entity.delete(network_entity);
     }
 
-    pub fn delete_network_entity(&mut self, entity: usize) {
-        let real_id = self.network_to_entity[entity];
+    pub fn delete_from_network_entity(&mut self, entity: Entity) {
+        let real_entity = self.network_to_entity[entity];
 
-        self.entity_to_network.delete(real_id);
+        self.entity_to_network.delete(real_entity);
         self.network_to_entity.delete(entity);
     }
 
-    pub fn get_real_entity(&self, network_entity: usize) -> Option<&usize> {
+    pub fn get_real_entity(&self, network_entity: Entity) -> Option<&Entity> {
         self.network_to_entity.get(network_entity)
     }
 
-    pub fn get_network_entity(&self, real_entity: usize) -> Option<&usize> {
+    pub fn get_network_entity(&self, real_entity: Entity) -> Option<&Entity> {
         self.entity_to_network.get(real_entity)
     }
 }
