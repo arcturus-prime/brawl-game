@@ -1320,14 +1320,13 @@ impl GeometryTree {
 
         best_hit
     }
-
-    //TODO(arcprime): seidel's algorithm
-
     fn solve_spacetime_constraints(
         constraints: &[(Plane3, bool, bool)],
         starting_point: Vector3,
         displacement: Vector3,
     ) -> Option<RaycastData> {
+        //TODO(arcprime): seidel's algorithm
+
         None
     }
 
@@ -1359,62 +1358,71 @@ impl GeometryTree {
         todo!();
     }
 
+    /// Load a GeometryTree CSG object from a mesh (this WILL ignore holes in the mesh, so be warned)
     pub fn load_from_mesh(mesh: &Mesh) -> Self {
+        // TODO(arcprime): This function's flow and redundancy kinda sucks
+
         let mut tree = GeometryTree {
             nodes: vec![Halfspace {
-                plane: Plane3::new(Vector3::X, 0.0),
-                positive: HalfspaceContents::solid(0),
+                plane: mesh.calculate_face_plane(0),
                 negative: HalfspaceContents::solid(0),
+                positive: HalfspaceContents::empty(),
             }],
             bounds: mesh.get_bounding_box(),
         };
 
         let mut stack = vec![];
-        let mut face_index = 0;
+        let mut face_index = mesh.faces[0] + 1;
         while face_index < mesh.faces.len() {
-            stack.push((
-                face_index,
-                HalfspaceContents::index(0),
-                HalfspaceContents::index(0),
-            ));
+            let side = mesh.classify_face_with_plane(&tree.nodes[0].plane, face_index);
+
+            match side {
+                PlaneSide::Positive => stack.push((face_index, true, 0)),
+                PlaneSide::Negative => stack.push((face_index, false, 0)),
+                PlaneSide::Both => {
+                    stack.push((face_index, true, 0));
+                    stack.push((face_index, false, 0));
+                }
+            }
 
             face_index += mesh.faces[face_index] + 1;
         }
 
-        while let Some((face_index, last_contents, contents)) = stack.pop() {
+        while let Some((face_index, is_positive, index)) = stack.pop() {
+            let contents = if is_positive {
+                tree.nodes[index].positive
+            } else {
+                tree.nodes[index].negative
+            };
+
             if !contents.is_index() {
-                let new_contents = HalfspaceContents::index(tree.nodes.len() as u32);
                 let plane = mesh.calculate_face_plane(face_index);
+                let new_contents = HalfspaceContents::index(tree.nodes.len() as u32);
 
                 tree.nodes.push(Halfspace {
                     plane,
-                    negative: contents,
+                    negative: HalfspaceContents::solid(0),
                     positive: HalfspaceContents::empty(),
                 });
 
-                let node = &mut tree.nodes[last_contents.get_index().unwrap() as usize];
-
-                match mesh.classify_face_with_plane(&plane, face_index) {
-                    PlaneSide::Positive => node.positive = new_contents,
-                    PlaneSide::Negative => node.negative = new_contents,
-                    PlaneSide::Both => {
-                        node.positive = new_contents;
-                        node.negative = new_contents;
-                    }
-                }
+                if is_positive {
+                    tree.nodes[index].positive = new_contents
+                } else {
+                    tree.nodes[index].negative = new_contents
+                };
 
                 continue;
             }
 
-            let node = &tree.nodes[contents.get_index().unwrap() as usize];
-            let side = mesh.classify_face_with_plane(&node.plane, face_index);
+            let index = contents.get_index().unwrap() as usize;
+            let side = mesh.classify_face_with_plane(&tree.nodes[index].plane, face_index);
 
             match side {
-                PlaneSide::Positive => stack.push((face_index, contents, node.positive)),
-                PlaneSide::Negative => stack.push((face_index, contents, node.negative)),
+                PlaneSide::Positive => stack.push((face_index, true, index)),
+                PlaneSide::Negative => stack.push((face_index, false, index)),
                 PlaneSide::Both => {
-                    stack.push((face_index, contents, node.positive));
-                    stack.push((face_index, contents, node.negative));
+                    stack.push((face_index, true, index));
+                    stack.push((face_index, false, index));
                 }
             }
         }
@@ -1460,9 +1468,9 @@ impl Mesh {
         let mut negative = false;
 
         for i in vertex_indices {
-            if plane.distance_to_point(self.vertices[*i]) >= 0.0 {
+            if plane.distance_to_point(self.vertices[*i]) > 0.0 {
                 positive = true
-            } else {
+            } else if plane.distance_to_point(self.vertices[*i]) < 0.0 {
                 negative = true;
             }
         }
@@ -1494,44 +1502,5 @@ impl Mesh {
         distance /= vertex_indices.len() as f32;
 
         Plane3::new(normal, distance)
-    }
-
-    pub fn create_cube_mesh() -> Mesh {
-        let vertices = vec![
-            Vector3::new(-0.5, -0.5, -0.5), // 0: left-bottom-back
-            Vector3::new(0.5, -0.5, -0.5),  // 1: right-bottom-back
-            Vector3::new(0.5, 0.5, -0.5),   // 2: right-top-back
-            Vector3::new(-0.5, 0.5, -0.5),  // 3: left-top-back
-            Vector3::new(-0.5, -0.5, 0.5),  // 4: left-bottom-front
-            Vector3::new(0.5, -0.5, 0.5),   // 5: right-bottom-front
-            Vector3::new(0.5, 0.5, 0.5),    // 6: right-top-front
-            Vector3::new(-0.5, 0.5, 0.5),   // 7: left-top-front
-        ];
-
-        let normals = vec![
-            Vector3::new(-0.5, -0.5, -0.5).normalize(),
-            Vector3::new(0.5, -0.5, -0.5).normalize(),
-            Vector3::new(0.5, 0.5, -0.5).normalize(),
-            Vector3::new(-0.5, 0.5, -0.5).normalize(),
-            Vector3::new(-0.5, -0.5, 0.5).normalize(),
-            Vector3::new(0.5, -0.5, 0.5).normalize(),
-            Vector3::new(0.5, 0.5, 0.5).normalize(),
-            Vector3::new(-0.5, 0.5, 0.5).normalize(),
-        ];
-
-        let faces = vec![
-            4, 0, 1, 2, 3, // Front face (normal 1)
-            4, 4, 5, 6, 7, // Left face (normal 2)
-            4, 0, 3, 7, 4, // Right face (normal 3)
-            4, 1, 5, 6, 2, // Bottom face (normal 4)
-            4, 0, 4, 5, 1, // Top face (normal 5)
-            4, 3, 2, 6, 7,
-        ];
-
-        Mesh {
-            normals,
-            vertices,
-            faces,
-        }
     }
 }

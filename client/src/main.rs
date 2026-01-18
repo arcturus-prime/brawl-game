@@ -170,6 +170,8 @@ impl Game {
 
                     let collider = GeometryTree::load_from_mesh(&Mesh::create_cube_mesh());
 
+                    println!("{:#?}", collider);
+
                     self.transforms.insert(entity, Transform3::identity());
                     self.momenta.insert(entity, Moment::new(5.0));
 
