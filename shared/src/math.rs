@@ -1,12 +1,6 @@
 use std::{
-    f32::{self, EPSILON, NAN, NEG_INFINITY},
-    f64::INFINITY,
-    ops::{
-        Add, AddAssign, ControlFlow, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub,
-        SubAssign,
-    },
-    sync::PoisonError,
-    task::Poll,
+    f32::{self, EPSILON},
+    ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -743,15 +737,6 @@ impl BoundingBox3 {
         BoundingBox3 { min, max }
     }
 
-    pub fn contains(&self, other: &BoundingBox3) -> bool {
-        self.min.x <= other.min.x
-            && self.min.y <= other.min.y
-            && self.min.z <= other.min.z
-            && self.max.x >= other.max.x
-            && self.max.y >= other.max.y
-            && self.max.z >= other.max.z
-    }
-
     pub fn intersects(&self, other: &BoundingBox3) -> bool {
         (self.min.x <= other.max.x && self.max.x >= other.min.x)
             && (self.min.y <= other.max.y && self.max.y >= other.min.y)
@@ -1431,10 +1416,11 @@ impl GeometryTree {
     }
 }
 
+#[derive(Default)]
 pub struct Mesh {
-    pub normals: Vec<Vector3>,
-    pub vertices: Vec<Vector3>,
-    pub faces: Vec<usize>,
+    normals: Vec<Vector3>,
+    vertices: Vec<Vector3>,
+    faces: Vec<usize>,
 }
 
 impl Mesh {

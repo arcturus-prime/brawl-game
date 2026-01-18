@@ -1,7 +1,5 @@
-use core::net;
 use std::{
-    collections::BTreeMap,
-    net::{IpAddr, SocketAddr, SocketAddrV4},
+    net::{IpAddr, SocketAddr},
     str::FromStr,
     time::Instant,
 };
@@ -10,10 +8,12 @@ use shared::{
     math::{GeometryTree, Transform3},
     net::{Network, NetworkError, Packet},
     physics::{Moment, step_world},
-    player::{PlayerData, PlayerInputState},
+    player::PlayerData,
     tick::Ticker,
     utility::{EntityReserver, SparseSet},
 };
+
+mod assets;
 
 pub struct Game {
     players: SparseSet<PlayerData>,
