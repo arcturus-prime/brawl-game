@@ -307,8 +307,8 @@ impl Renderable {
                 ],
                 positive: x.positive.0,
                 negative: x.negative.0,
-                padding1: 0,
-                padding2: 0,
+                metadata1: x.metadata.0,
+                metadata2: x.metadata.1,
             }
         }
 
@@ -443,7 +443,7 @@ impl Renderer {
         let geometry = Buffer::new_unsized(
             self.memory_allocator.clone(),
             BufferCreateInfo {
-                usage: BufferUsage::UNIFORM_BUFFER,
+                usage: BufferUsage::STORAGE_BUFFER,
                 ..Default::default()
             },
             AllocationCreateInfo {

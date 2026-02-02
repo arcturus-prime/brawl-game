@@ -5,7 +5,7 @@ use std::{
 };
 
 use shared::{
-    math::{GeometryTree, Transform3},
+    math::{GeometryTree, HalfspaceMetadata, Transform3},
     net::{Network, NetworkError, Packet},
     physics::{Moment, step_world},
     player::PlayerData,
@@ -36,7 +36,8 @@ impl Game {
         while let Ok((client_entity, packet)) = self.network.receive(&mut self.reserver) {
             match packet {
                 Packet::ClientHello => {
-                    let collider = GeometryTree::from_cube(1.0, 1.0, 1.0, 0);
+                    let collider =
+                        GeometryTree::from_cube(1.0, 1.0, 1.0, HalfspaceMetadata::default());
 
                     self.transforms
                         .insert(client_entity, Transform3::identity());

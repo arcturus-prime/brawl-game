@@ -16,32 +16,27 @@ layout(set = 0, binding = 2) uniform readonly ViewData {
     vec4 camera_rotation;
 } view_data;
 
-#define LEAF 0x80000000
+#define SOLID 0xFFFFFFFE
 #define EMPTY 0xFFFFFFFF
-#define MAX_DEPTH 512
-#define RAY_CLIPPING_DISTANCE 1e9
-
-#define STEEL 0x0
-#define PLASTIC 0x1
-#define GLASS 0x2
+#define MAX_DEPTH 64
 
 struct BSPNode {
     vec4 plane;
     uint positive;
     uint negative;
-    uint padding1;
-    uint padding2;
+    uint metadata1;
+    uint metadata2;
 };
 
-layout(set = 0, binding = 3) uniform readonly Geometry {
-    BSPNode nodes[1024];
+layout(set = 0, binding = 3) buffer readonly Geometry {
+    BSPNode nodes[];
 } geometry;
 
 struct StackElement {
     float t_min;
     float t_max;
     uint node;
-    vec3 normal;
+    uint first_entered;
 };
 
 vec3 rotate_vector(vec3 v, vec4 q) {
@@ -74,55 +69,15 @@ float plane_distance(vec3 point, vec3 normal, float d) {
     return dot(point, normal) - d;
 }
 
-vec4 getColor(uint material, vec3 normal, vec3 view_dir) {
-    vec3 n = normalize(normal);
-    vec3 v = normalize(view_dir);
-
-    vec3 light_dir = normalize(vec3(0.5, 1.0, 0.3));
-    float diffuse = max(dot(n, light_dir), 0.0);
-
-    float ambient = 0.2;
-
-    float lighting = ambient + diffuse * 0.8;
-
-    vec3 base_color;
-    float roughness = 0.5;
-
-    float fresnel = pow(1.0 - max(dot(n, v), 0.0), 5.0);
-
-    if (material == STEEL) {
-        base_color = vec3(0.7, 0.7, 0.75);
-        roughness = 0.3;
-
-        vec3 reflect_dir = reflect(-light_dir, n);
-        float spec = pow(max(dot(v, reflect_dir), 0.0), 32.0);
-        lighting += spec * 0.5;
-
-        lighting = mix(lighting, lighting * 1.5, fresnel * 0.4);
-    } else if (material == PLASTIC) {
-        base_color = vec3(0.8, 0.3, 0.2);
-        roughness = 0.6;
-
-        vec3 reflect_dir = reflect(-light_dir, n);
-        float spec = pow(max(dot(v, reflect_dir), 0.0), 16.0);
-        lighting += spec * 0.2;
-    } else if (material == GLASS) {
-        base_color = vec3(0.85, 0.9, 1.0);
-        roughness = 0.05;
-
-        vec3 reflect_dir = reflect(-light_dir, n);
-        float spec = pow(max(dot(v, reflect_dir), 0.0), 64.0);
-        lighting += spec * 0.8;
-
-        lighting = mix(lighting, 1.5, fresnel * 0.6);
-    } else {
-        base_color = vec3(0.5, 0.5, 0.5);
-    }
-
-    vec3 final_color = base_color * lighting;
-
-    return vec4(final_color, 1.0);
+vec4 getColor(uint metadata1, uint metadata2, vec3 normal) {
+    return vec4(1.0, 0.0, 0.0, 0.0);
 }
+
+#define GUARD_PUSH(T_MIN, T_MAX, NODE, FIRST) \
+    if ((NODE) != EMPTY && stack_pointer < MAX_DEPTH) { \
+        stack[stack_pointer] = StackElement((T_MIN), (T_MAX), (NODE), (FIRST)); \
+        stack_pointer++; \
+    }
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -145,9 +100,9 @@ void main() {
     stack[0] =
         StackElement(
             0.0,
-            RAY_CLIPPING_DISTANCE,
+            1e9,
             0,
-            vec3(0.0, 0.0, 0.0)
+            0
         );
 
     uint stack_pointer = 1;
@@ -157,9 +112,7 @@ void main() {
         stack_pointer--;
         StackElement context = stack[stack_pointer];
 
-        if (context.node == EMPTY) {
-            continue;
-        } else if (context.node >= LEAF) {
+        if (context.node == SOLID) {
             hit = 1;
             break;
         }
@@ -173,43 +126,19 @@ void main() {
         float end_distance = plane_distance(stop, node.plane.xyz, node.plane.w);
 
         if (start_distance >= 0.0 && end_distance >= 0.0) {
-            stack[stack_pointer] =
-                StackElement(
-                    context.t_min, context.t_max, node.positive, context.normal
-                );
-            stack_pointer++;
+            GUARD_PUSH(context.t_min, context.t_max, node.positive, context.first_entered);
         } else if (start_distance < 0.0 && end_distance < 0.0) {
-            stack[stack_pointer] =
-                StackElement(
-                    context.t_min, context.t_max, node.negative, context.normal
-                );
-            stack_pointer++;
+            GUARD_PUSH(context.t_min, context.t_max, node.negative, context.first_entered);
         } else
         {
             float t_split = intersect_plane(ray_origin, ray_direction, node.plane.xyz, node.plane.w);
 
             if (start_distance >= 0.0) {
-                stack[stack_pointer] =
-                    StackElement(
-                        t_split, context.t_max, node.negative, node.plane.xyz
-                    );
-                stack[stack_pointer + 1] =
-                    StackElement(
-                        context.t_min, t_split, node.positive, context.normal
-                    );
-
-                stack_pointer += 2;
+                GUARD_PUSH(t_split, context.t_max, node.negative, context.node);
+                GUARD_PUSH(context.t_min, t_split, node.positive, context.first_entered);
             } else {
-                stack[stack_pointer] =
-                    StackElement(
-                        t_split, context.t_max, node.positive, node.plane.xyz
-                    );
-                stack[stack_pointer + 1] =
-                    StackElement(
-                        context.t_min, t_split, node.negative, context.normal
-                    );
-
-                stack_pointer += 2;
+                GUARD_PUSH(t_split, context.t_max, node.positive, context.node);
+                GUARD_PUSH(context.t_min, t_split, node.negative, context.first_entered);
             }
         }
     }
@@ -221,12 +150,14 @@ void main() {
         return;
     }
 
-    uint material = stack[stack_pointer].node & 0x7FFFFFFF;
-    vec3 normal = stack[stack_pointer].normal;
+    uint first_index = stack[stack_pointer].first_entered;
 
-    vec3 view_direction = view_data.camera_position - (ray_origin + ray_direction * depth_current);
-    vec4 color = getColor(material, normal, view_direction);
+    uint metadata1 = geometry.nodes[first_index].metadata1;
+    uint metadata2 = geometry.nodes[first_index].metadata2;
+    vec3 normal = geometry.nodes[first_index].plane.xyz;
 
-    imageStore(img, pixel, color);
+    vec4 color = getColor(metadata1, metadata2, normal);
+
+    imageStore(img, pixel, vec4(1.0, 0.0, 0.0, 0.0));
     imageStore(depth_img, pixel, vec4(depth_current, 0.0, 0.0, 0.0));
 }

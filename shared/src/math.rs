@@ -874,12 +874,8 @@ pub struct RaycastData {
 pub struct HalfspaceContents(pub u32);
 
 impl HalfspaceContents {
-    pub fn solid(metadata: u32) -> Self {
-        if metadata >= 0x7FFFFFFF {
-            panic!("That metadata is reserved for empty nodes");
-        }
-
-        Self(0x80000000 | metadata)
+    pub fn solid() -> Self {
+        Self(0xFFFFFFFE)
     }
 
     pub fn empty() -> Self {
@@ -887,8 +883,8 @@ impl HalfspaceContents {
     }
 
     pub fn index(index: u32) -> Self {
-        if index >= 0x80000000 {
-            panic!("Index must be less than 0x80000000");
+        if index >= 0xFFFFFFFE {
+            panic!("Index must be less than 0xFFFFFFFE");
         }
 
         Self(index)
@@ -898,7 +894,7 @@ impl HalfspaceContents {
         if self.is_solid() {
             *self = Self::empty()
         } else if self.is_empty() {
-            *self = Self::solid(0)
+            *self = Self::solid()
         }
     }
 
@@ -907,7 +903,7 @@ impl HalfspaceContents {
     }
 
     pub fn is_solid(self) -> bool {
-        self.0 >= 0x80000000 && !self.is_empty()
+        self.0 == 0xFFFFFFFE
     }
 
     pub fn is_index(self) -> bool {
@@ -923,19 +919,35 @@ impl HalfspaceContents {
     }
 }
 
+#[derive(Clone, Debug, Default, Copy)]
+pub struct HalfspaceMetadata(pub u32, pub u32);
+
+impl HalfspaceMetadata {
+    pub fn new() -> Self {
+        Self(0, 0)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Halfspace {
     pub plane: Plane3,
     pub negative: HalfspaceContents,
     pub positive: HalfspaceContents,
+    pub metadata: HalfspaceMetadata,
 }
 
 impl Halfspace {
-    pub fn new(plane: Plane3, positive: HalfspaceContents, negative: HalfspaceContents) -> Self {
+    pub fn new(
+        plane: Plane3,
+        positive: HalfspaceContents,
+        negative: HalfspaceContents,
+        metadata: HalfspaceMetadata,
+    ) -> Self {
         Self {
             plane,
             positive,
             negative,
+            metadata,
         }
     }
 
@@ -955,11 +967,11 @@ pub struct GeometryTree {
 }
 
 impl GeometryTree {
-    pub fn nodes(&self) -> &[Halfspace] {
+    pub fn nodes(&self) -> &Vec<Halfspace> {
         &self.nodes
     }
 
-    pub fn from_cube(size_x: f32, size_y: f32, size_z: f32, metadata: u32) -> Self {
+    pub fn from_cube(size_x: f32, size_y: f32, size_z: f32, metadata: HalfspaceMetadata) -> Self {
         let half_x = size_x / 2.0;
         let half_y = size_y / 2.0;
         let half_z = size_z / 2.0;
@@ -969,31 +981,37 @@ impl GeometryTree {
                 Plane3::new(Vector3::X, half_x),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(1),
+                metadata,
             ),
             Halfspace::new(
                 Plane3::new(-Vector3::X, half_x),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(2),
+                metadata,
             ),
             Halfspace::new(
                 Plane3::new(Vector3::Y, half_y),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(3),
+                metadata,
             ),
             Halfspace::new(
                 Plane3::new(-Vector3::Y, half_y),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(4),
+                metadata,
             ),
             Halfspace::new(
                 Plane3::new(Vector3::Z, half_z),
                 HalfspaceContents::empty(),
                 HalfspaceContents::index(5),
+                metadata,
             ),
             Halfspace::new(
                 Plane3::new(-Vector3::Z, half_z),
                 HalfspaceContents::empty(),
-                HalfspaceContents::solid(metadata),
+                HalfspaceContents::solid(),
+                metadata,
             ),
         ];
 
@@ -1338,26 +1356,24 @@ impl GeometryTree {
         }
     }
 
-    /// Simplify infeasible regions and unreachable plane nodes
-    pub fn simplify(&mut self) {
-        todo!();
+    pub fn optimize(&mut self) {
+        todo!()
     }
 
     /// Load a GeometryTree CSG object from a mesh (this WILL ignore holes in the mesh, so be warned)
     pub fn load_from_mesh(mesh: &Mesh) -> Self {
-        // TODO(arcprime): This function's flow and redundancy kinda sucks
-
         let mut tree = GeometryTree {
-            nodes: vec![Halfspace {
-                plane: mesh.calculate_face_plane(0),
-                negative: HalfspaceContents::solid(0),
-                positive: HalfspaceContents::empty(),
-            }],
+            nodes: vec![Halfspace::new(
+                mesh.calculate_face_plane(0),
+                HalfspaceContents::solid(),
+                HalfspaceContents::empty(),
+                HalfspaceMetadata::default(),
+            )],
             bounds: mesh.get_bounding_box(),
         };
 
         let mut stack = vec![];
-        let mut face_index = mesh.faces[0] + 1;
+        let mut face_index = mesh.faces[0] + 2;
         while face_index < mesh.faces.len() {
             let side = mesh.classify_face_with_plane(&tree.nodes[0].plane, face_index);
 
@@ -1370,7 +1386,7 @@ impl GeometryTree {
                 }
             }
 
-            face_index += mesh.faces[face_index] + 1;
+            face_index += mesh.faces[face_index] + 2;
         }
 
         while let Some((face_index, is_positive, index)) = stack.pop() {
@@ -1384,11 +1400,12 @@ impl GeometryTree {
                 let plane = mesh.calculate_face_plane(face_index);
                 let new_contents = HalfspaceContents::index(tree.nodes.len() as u32);
 
-                tree.nodes.push(Halfspace {
+                tree.nodes.push(Halfspace::new(
                     plane,
-                    negative: HalfspaceContents::solid(0),
-                    positive: HalfspaceContents::empty(),
-                });
+                    HalfspaceContents::solid(),
+                    HalfspaceContents::empty(),
+                    HalfspaceMetadata::default(),
+                ));
 
                 if is_positive {
                     tree.nodes[index].positive = new_contents
@@ -1420,6 +1437,9 @@ impl GeometryTree {
 pub struct Mesh {
     normals: Vec<Vector3>,
     vertices: Vec<Vector3>,
+    materials: Vec<u64>,
+
+    // len, material, vertices...
     faces: Vec<usize>,
 }
 
@@ -1446,9 +1466,13 @@ impl Mesh {
         bounds
     }
 
+    pub fn get_face_material(&self, face_index: usize) -> &u64 {
+        &self.materials[self.faces[face_index + 1]]
+    }
+
     pub fn classify_face_with_plane(&self, plane: &Plane3, face_index: usize) -> PlaneSide {
         let length = self.faces[face_index];
-        let vertex_indices = &self.faces[face_index + 1..face_index + 1 + length];
+        let vertex_indices = &self.faces[face_index + 2..face_index + 2 + length];
 
         let mut positive = false;
         let mut negative = false;
@@ -1470,7 +1494,7 @@ impl Mesh {
 
     pub fn calculate_face_plane(&self, face_index: usize) -> Plane3 {
         let length = self.faces[face_index];
-        let vertex_indices = &self.faces[face_index + 1..face_index + 1 + length];
+        let vertex_indices = &self.faces[face_index + 2..face_index + 2 + length];
 
         let mut normal = Vector3::zero();
         for i in vertex_indices {

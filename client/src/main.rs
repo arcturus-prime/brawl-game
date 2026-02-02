@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, net::SocketAddr, str::FromStr, time::Instant};
 
 use shared::{
-    math::{GeometryTree, Mesh, Transform3, Vector3},
+    math::{GeometryTree, HalfspaceMetadata, Mesh, Transform3, Vector3},
     net::{Network, Packet},
     physics::{Moment, step_world},
     player::{PlayerData, PlayerInputState},
@@ -168,15 +168,12 @@ impl Game {
                         .network
                         .reserve_real_entity(&mut self.reserver, net_entity);
 
-                    let collider = GeometryTree::load_from_mesh(&Mesh::create_cube_mesh());
-
-                    println!("{:#?}", collider);
+                    let collider = GeometryTree::from_cube(5.0, 5.0, 5.0, HalfspaceMetadata::new());
 
                     self.transforms.insert(entity, Transform3::identity());
                     self.momenta.insert(entity, Moment::new(5.0));
 
                     let mut renderable = self.renderer.create_renderable().unwrap();
-
                     renderable.set_nodes(&collider).unwrap();
 
                     self.colliders.insert(entity, collider);
