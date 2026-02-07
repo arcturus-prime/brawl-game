@@ -1,12 +1,13 @@
-use std::{collections::BTreeMap, net::SocketAddr, str::FromStr, time::Instant};
+use std::{net::SocketAddr, str::FromStr, time::Instant};
 
+use obj::Obj;
 use shared::{
-    math::{GeometryTree, HalfspaceMetadata, Mesh, Transform3, Vector3},
+    geometry::{GeometryTree, HalfspaceMetadata},
+    math::{Transform3, Vector3},
     net::{Network, Packet},
     physics::{Moment, step_world},
     player::{PlayerData, PlayerInputState},
-    tick::Ticker,
-    utility::{EntityReserver, SingletonSet, SparseSet},
+    utility::{EntityReserver, SingletonSet, SparseSet, Ticker},
 };
 use winit::{
     application::ApplicationHandler,
@@ -173,8 +174,22 @@ impl Game {
                     self.transforms.insert(entity, Transform3::identity());
                     self.momenta.insert(entity, Moment::new(5.0));
 
-                    let mut renderable = self.renderer.create_renderable().unwrap();
-                    renderable.set_nodes(&collider).unwrap();
+                    let mut mesh =
+                        GeometryTree::from_cube(10.0, 10.0, 10.0, HalfspaceMetadata::new());
+
+                    let mut hole =
+                        GeometryTree::from_cube(17.5, 5.0, 5.0, HalfspaceMetadata::new());
+                    hole.transform(Transform3::from_position(Vector3::Y * 5.0));
+                    hole.invert();
+                    mesh.intersection(hole);
+
+                    let mut hole =
+                        GeometryTree::from_cube(17.5, 5.0, 5.0, HalfspaceMetadata::new());
+                    hole.transform(Transform3::from_position(Vector3::Y * -4.0));
+                    hole.invert();
+                    mesh.intersection(hole);
+
+                    let renderable = self.renderer.create_renderable(&mesh).unwrap();
 
                     self.colliders.insert(entity, collider);
                     self.renderable.insert(entity, renderable);

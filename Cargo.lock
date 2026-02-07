@@ -204,6 +204,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 name = "client"
 version = "0.1.0"
 dependencies = [
+ "obj",
  "shared",
  "thiserror 2.0.18",
  "vulkano",
@@ -1243,7 +1244,6 @@ dependencies = [
 name = "server"
 version = "0.1.0"
 dependencies = [
- "obj",
  "shared",
  "thiserror 2.0.18",
 ]
@@ -1274,6 +1274,7 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "enum_discriminant",
+ "obj",
  "thiserror 2.0.18",
 ]
 

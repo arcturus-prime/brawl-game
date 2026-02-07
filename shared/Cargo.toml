@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 enum_discriminant = "1.0.1"
+obj = "0.10.2"
 thiserror = "2.0.17"

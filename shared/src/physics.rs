@@ -1,9 +1,9 @@
 use crate::{
-    math::{GeometryTree, RaycastData, Transform3, Vector3},
+    geometry::{GeometryTree, RaycastData},
+    math::{Transform3, Vector3},
     utility::SparseSet,
 };
 
-pub const COLLISION_RESTITUTION: f32 = 1.0;
 pub const LINEAR_DAMPENING: f32 = 0.99;
 
 pub struct Moment {

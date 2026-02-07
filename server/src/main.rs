@@ -5,15 +5,13 @@ use std::{
 };
 
 use shared::{
-    math::{GeometryTree, HalfspaceMetadata, Transform3},
+    geometry::{GeometryTree, HalfspaceMetadata},
+    math::Transform3,
     net::{Network, NetworkError, Packet},
     physics::{Moment, step_world},
     player::PlayerData,
-    tick::Ticker,
-    utility::{EntityReserver, SparseSet},
+    utility::{EntityReserver, SparseSet, Ticker},
 };
-
-mod assets;
 
 pub struct Game {
     players: SparseSet<PlayerData>,

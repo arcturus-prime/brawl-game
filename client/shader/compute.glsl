@@ -69,8 +69,8 @@ float plane_distance(vec3 point, vec3 normal, float d) {
     return dot(point, normal) - d;
 }
 
-vec4 getColor(uint metadata1, uint metadata2, vec3 normal) {
-    return vec4(1.0, 0.0, 0.0, 0.0);
+vec4 getColor(uint metadata1, uint metadata2, vec3 position, vec3 normal) {
+    return vec4(normal * 0.5 + vec3(0.5, 0.5, 0.5), 1.0);
 }
 
 #define GUARD_PUSH(T_MIN, T_MAX, NODE, FIRST) \
@@ -151,13 +151,14 @@ void main() {
     }
 
     uint first_index = stack[stack_pointer].first_entered;
+    float t_impact = stack[stack_pointer].t_min;
 
     uint metadata1 = geometry.nodes[first_index].metadata1;
     uint metadata2 = geometry.nodes[first_index].metadata2;
     vec3 normal = geometry.nodes[first_index].plane.xyz;
 
-    vec4 color = getColor(metadata1, metadata2, normal);
+    vec4 color = getColor(metadata1, metadata2, ray_origin + ray_direction * t_impact, normal);
 
-    imageStore(img, pixel, vec4(1.0, 0.0, 0.0, 0.0));
+    imageStore(img, pixel, color);
     imageStore(depth_img, pixel, vec4(depth_current, 0.0, 0.0, 0.0));
 }

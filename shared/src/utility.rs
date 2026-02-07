@@ -544,3 +544,44 @@ impl<'a> ByteStream<'a> {
         Ok(Transform3::new(self.read_vec3()?, self.read_quaternion()?))
     }
 }
+
+pub struct Ticker {
+    pub tick: u32,
+
+    pub warp: f32,
+    pub step_size: f32,
+
+    pub accumulator: f32,
+}
+
+impl Default for Ticker {
+    fn default() -> Self {
+        Self {
+            tick: 0,
+            warp: 0.0,
+            step_size: 1.0 / 60.0,
+            accumulator: 0.0,
+        }
+    }
+}
+
+impl Ticker {
+    pub fn update<T: FnMut(u32, f32) -> ()>(&mut self, dt: f32, mut function: T) {
+        self.accumulator += dt;
+
+        while self.accumulator > self.step_size + self.warp {
+            self.accumulator -= self.step_size + self.warp;
+            self.tick += 1;
+
+            function(self.tick, self.step_size)
+        }
+    }
+
+    pub fn set_tick(&mut self, tick: u32) {
+        self.tick = tick;
+    }
+
+    pub fn set_warp(&mut self, warp: f32) {
+        self.warp = -warp;
+    }
+}

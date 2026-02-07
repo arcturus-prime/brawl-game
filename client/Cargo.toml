@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+obj = "0.10.2"
 shared = { workspace = true }
 thiserror = "2.0.17"
 vulkano = "0.35.2"

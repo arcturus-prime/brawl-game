@@ -1,5 +1,6 @@
 use shared::{
-    math::{GeometryTree, Quaternion, Transform3, Vector3},
+    geometry::GeometryTree,
+    math::{Quaternion, Transform3, Vector3},
     utility::{Entity, SparseSet},
 };
 use std::{error::Error, sync::Arc};
@@ -33,6 +34,8 @@ use vulkano::{
     sync::{self, GpuFuture},
 };
 use winit::{event_loop::ActiveEventLoop, window::Window};
+
+use crate::render;
 
 #[derive(Debug, Clone)]
 pub enum CameraMode {
@@ -439,8 +442,11 @@ impl Renderer {
         })
     }
 
-    pub fn create_renderable(&mut self) -> Result<Renderable, Box<dyn Error>> {
-        let geometry = Buffer::new_unsized(
+    pub fn create_renderable(
+        &mut self,
+        geometry: &GeometryTree,
+    ) -> Result<Renderable, Box<dyn Error>> {
+        let buffer = Buffer::new_unsized(
             self.memory_allocator.clone(),
             BufferCreateInfo {
                 usage: BufferUsage::STORAGE_BUFFER,
@@ -451,10 +457,14 @@ impl Renderer {
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
                 ..Default::default()
             },
-            32 * 1024,
+            32 * geometry.nodes().len() as u64,
         )?;
 
-        Ok(Renderable { geometry })
+        let mut renderable = Renderable { geometry: buffer };
+
+        renderable.set_nodes(geometry)?;
+
+        Ok(renderable)
     }
 
     fn set_camera(&mut self, transform: Transform3, fov: f32) -> Result<(), Box<dyn Error>> {
