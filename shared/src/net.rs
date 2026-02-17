@@ -69,7 +69,6 @@ impl Packet {
                 stream.write_vec3(velocity)?;
             }
             Packet::PlayerInput { input, tick } => {
-                stream.write_vec3(input.look_direction)?;
                 stream.write_vec3(input.want_direction)?;
                 stream.write_f32(input.throttle)?;
                 stream.write_u32(tick)?;
@@ -106,7 +105,6 @@ impl Packet {
             },
             3 => Self::PlayerInput {
                 input: PlayerInputState {
-                    look_direction: stream.read_vec3()?,
                     want_direction: stream.read_vec3()?,
                     throttle: stream.read_f32()?,
                 },

@@ -14,17 +14,11 @@ impl Vector3 {
     pub const X: Vector3 = Vector3::new(1.0, 0.0, 0.0);
     pub const Y: Vector3 = Vector3::new(0.0, 1.0, 0.0);
     pub const Z: Vector3 = Vector3::new(0.0, 0.0, 1.0);
+    pub const ZERO: Vector3 = Vector3::new(0.0, 0.0, 0.0);
+    pub const ONE: Vector3 = Vector3::new(1.0, 1.0, 1.0);
 
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Vector3 { x, y, z }
-    }
-
-    pub fn zero() -> Self {
-        Vector3::new(0.0, 0.0, 0.0)
-    }
-
-    pub fn one() -> Self {
-        Vector3::new(1.0, 1.0, 1.0)
     }
 
     pub fn dot(self, other: Vector3) -> f32 {
@@ -52,7 +46,7 @@ impl Vector3 {
         if len > EPSILON {
             self / len
         } else {
-            Vector3::zero()
+            Vector3::ZERO
         }
     }
 
@@ -66,7 +60,7 @@ impl Vector3 {
         if other_len_sq > EPSILON {
             other * (dot / other_len_sq)
         } else {
-            Vector3::zero()
+            Vector3::ZERO
         }
     }
 
@@ -726,7 +720,7 @@ impl BoundingBox3 {
 
     pub fn intersection(&self, other: &BoundingBox3) -> BoundingBox3 {
         if !self.intersects(&other) {
-            return BoundingBox3::new(Vector3::zero(), Vector3::zero());
+            return BoundingBox3::new(Vector3::ZERO, Vector3::ZERO);
         }
 
         BoundingBox3::new(
@@ -790,7 +784,7 @@ impl Transform3 {
 
     pub fn identity() -> Self {
         Transform3 {
-            position: Vector3::zero(),
+            position: Vector3::ZERO,
             rotation: Quaternion::identity(),
         }
     }
@@ -804,7 +798,7 @@ impl Transform3 {
 
     pub fn from_rotation(rotation: Quaternion) -> Self {
         Transform3 {
-            position: Vector3::zero(),
+            position: Vector3::ZERO,
             rotation,
         }
     }

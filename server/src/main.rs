@@ -5,17 +5,16 @@ use std::{
 };
 
 use shared::{
-    geometry::{GeometryTree, HalfspaceMetadata},
     math::Transform3,
     net::{Network, NetworkError, Packet},
-    physics::{Moment, step_world},
+    physics::{Cuboid, Moment, step_world},
     player::PlayerData,
     utility::{EntityReserver, SparseSet, Ticker},
 };
 
 pub struct Game {
     players: SparseSet<PlayerData>,
-    colliders: SparseSet<GeometryTree>,
+    colliders: SparseSet<Cuboid>,
     momenta: SparseSet<Moment>,
     transforms: SparseSet<Transform3>,
 
@@ -34,8 +33,7 @@ impl Game {
         while let Ok((client_entity, packet)) = self.network.receive(&mut self.reserver) {
             match packet {
                 Packet::ClientHello => {
-                    let collider =
-                        GeometryTree::from_cube(1.0, 1.0, 1.0, HalfspaceMetadata::default());
+                    let collider = Cuboid::new(5.0, 5.0, 5.0);
 
                     self.transforms
                         .insert(client_entity, Transform3::identity());
@@ -112,7 +110,7 @@ impl Game {
                 current_input.apply(&mut self.momenta[*id], &mut self.transforms[*id]);
             }
 
-            step_world(&self.colliders, &mut self.momenta, &mut self.transforms, dt);
+            step_world(&mut self.momenta, &mut self.transforms, &self.colliders, dt);
 
             for (entity, data) in self.players.iter() {
                 let Some(net_entity) = self.network.get_network_entity(*entity) else {

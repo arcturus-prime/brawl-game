@@ -5,27 +5,36 @@ use crate::{
     physics::Moment,
 };
 
+const PLAYER_ROTATION_SPEED: f32 = 0.01;
 const PLAYER_ACCELERATION: f32 = 0.1;
 const PLAYER_MAX_SPEED: f32 = 100.0;
 
 #[derive(Default, Clone)]
 pub struct PlayerInputState {
     pub want_direction: Vector3,
-    pub look_direction: Vector3,
     pub throttle: f32,
 }
 
 impl PlayerInputState {
     pub fn apply(&mut self, moment: &mut Moment, transform: &mut Transform3) {
-        // note(arcprime): should always be normalized, but just in case
         self.want_direction = self.want_direction.normalize();
 
-        let current_velocity = moment.velocity.dot(self.want_direction);
-        let remaining =
-            (self.throttle * PLAYER_MAX_SPEED - current_velocity).clamp(0.0, PLAYER_MAX_SPEED);
+        let movement_direction = transform.rotate_vector(Vector3::Z);
+        let current_velocity = moment.velocity.dot(movement_direction);
+        let remaining = (self.throttle * PLAYER_MAX_SPEED - current_velocity)
+            .clamp(-PLAYER_MAX_SPEED, PLAYER_MAX_SPEED);
 
-        moment.apply_impulse(self.want_direction * remaining * PLAYER_ACCELERATION);
-        transform.rotation = Quaternion::look_at(self.look_direction, Vector3::Z);
+        moment.apply_impulse(movement_direction * remaining * PLAYER_ACCELERATION);
+
+        if self.want_direction == Vector3::ZERO {
+            return;
+        }
+
+        let target_rotation = Quaternion::look_at(self.want_direction, Vector3::Z);
+
+        transform.rotation = transform
+            .rotation
+            .slerp(target_rotation, PLAYER_ROTATION_SPEED)
     }
 }
 

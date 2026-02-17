@@ -2,10 +2,10 @@ use std::{net::SocketAddr, str::FromStr, time::Instant};
 
 use obj::Obj;
 use shared::{
-    geometry::{GeometryTree, HalfspaceMetadata},
+    geometry::Mesh,
     math::{Transform3, Vector3},
     net::{Network, Packet},
-    physics::{Moment, step_world},
+    physics::{Collidable, CollisionData, Cuboid, Moment, step_world},
     player::{PlayerData, PlayerInputState},
     utility::{EntityReserver, SingletonSet, SparseSet, Ticker},
 };
@@ -27,7 +27,7 @@ pub struct Game {
 
     players: SparseSet<PlayerData>,
     local_player: SingletonSet<()>,
-    colliders: SparseSet<GeometryTree>,
+    colliders: SparseSet<Cuboid>,
     momenta: SparseSet<Moment>,
     transforms: SparseSet<Transform3>,
     renderable: SparseSet<Renderable>,
@@ -159,6 +159,12 @@ impl Game {
         let dt = (new_update_time - self.last_update).as_secs_f32();
         self.last_update = new_update_time;
 
+        println!("{}", 1.0 / dt);
+
+        if 1.0 / dt < 100.0 {
+            println!("\nLOW FRAMRATE\n");
+        }
+
         while let Ok((_, packet)) = self.network.receive(&mut self.reserver) {
             match packet {
                 Packet::ClientHello => {
@@ -169,26 +175,13 @@ impl Game {
                         .network
                         .reserve_real_entity(&mut self.reserver, net_entity);
 
-                    let collider = GeometryTree::from_cube(5.0, 5.0, 5.0, HalfspaceMetadata::new());
+                    let collider = Cuboid::new(5.0, 5.0, 5.0);
 
                     self.transforms.insert(entity, Transform3::identity());
                     self.momenta.insert(entity, Moment::new(5.0));
 
-                    let mut mesh =
-                        GeometryTree::from_cube(10.0, 10.0, 10.0, HalfspaceMetadata::new());
-
-                    let mut hole =
-                        GeometryTree::from_cube(17.5, 5.0, 5.0, HalfspaceMetadata::new());
-                    hole.transform(Transform3::from_position(Vector3::Y * 5.0));
-                    hole.invert();
-                    mesh.intersection(hole);
-
-                    let mut hole =
-                        GeometryTree::from_cube(17.5, 5.0, 5.0, HalfspaceMetadata::new());
-                    hole.transform(Transform3::from_position(Vector3::Y * -4.0));
-                    hole.invert();
-                    mesh.intersection(hole);
-
+                    let obj = Obj::load("client/assets/Untitled.obj").unwrap();
+                    let mesh = Mesh::load_from_obj(&obj);
                     let renderable = self.renderer.create_renderable(&mesh).unwrap();
 
                     self.colliders.insert(entity, collider);
@@ -234,28 +227,19 @@ impl Game {
                 && let Some(data) = self.players.get_mut(*local_player_entity)
             {
                 let camera_tranform = self.transforms[*camera_id];
-                let mut move_direction = Vector3::zero();
+                let mut throttle = 0.0;
 
                 if self.input.key_held(KeyCode::KeyW) {
-                    move_direction += Vector3::X;
+                    throttle += 1.0;
                 }
 
                 if self.input.key_held(KeyCode::KeyS) {
-                    move_direction -= Vector3::X;
-                }
-
-                if self.input.key_held(KeyCode::KeyA) {
-                    move_direction -= Vector3::Y;
-                }
-
-                if self.input.key_held(KeyCode::KeyD) {
-                    move_direction += Vector3::Y;
+                    throttle -= 1.0;
                 }
 
                 let mut input = PlayerInputState {
-                    want_direction: camera_tranform.rotate_vector(move_direction),
-                    look_direction: camera_tranform.rotate_vector(Vector3::X),
-                    throttle: 1.0,
+                    want_direction: camera_tranform.rotation.rotate_vector(Vector3::X),
+                    throttle,
                 };
 
                 input.apply(
@@ -273,7 +257,7 @@ impl Game {
                 data.inputs.insert(tick, input);
             }
 
-            step_world(&self.colliders, &mut self.momenta, &mut self.transforms, dt);
+            step_world(&mut self.momenta, &mut self.transforms, &self.colliders, dt);
         });
 
         let dampening = 0.01;
