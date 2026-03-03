@@ -4,17 +4,18 @@ use std::{
     time::Instant,
 };
 
+use obj::Obj;
 use shared::{
-    math::Transform3,
+    math::{Mesh, Transform3},
     net::{Network, NetworkError, Packet},
-    physics::{Cuboid, Moment, step_world},
+    physics::{ConvexHull, Cuboid, Moment, step_world},
     player::PlayerData,
     utility::{EntityReserver, SparseSet, Ticker},
 };
 
 pub struct Game {
     players: SparseSet<PlayerData>,
-    colliders: SparseSet<Cuboid>,
+    colliders: SparseSet<ConvexHull>,
     momenta: SparseSet<Moment>,
     transforms: SparseSet<Transform3>,
 
@@ -33,11 +34,13 @@ impl Game {
         while let Ok((client_entity, packet)) = self.network.receive(&mut self.reserver) {
             match packet {
                 Packet::ClientHello => {
-                    let collider = Cuboid::new(5.0, 5.0, 5.0);
+                    let obj = Obj::load("shared/assets/Untitled.obj").unwrap();
+                    let mesh = Mesh::load_from_obj(&obj);
+                    let collider = ConvexHull::new(mesh.vertices.to_vec());
 
                     self.transforms
                         .insert(client_entity, Transform3::identity());
-                    self.momenta.insert(client_entity, Moment::new(5.0));
+                    self.momenta.insert(client_entity, Moment::new(5.0, 0.9));
                     self.colliders.insert(client_entity, collider);
                     self.players.insert(client_entity, PlayerData::default());
 

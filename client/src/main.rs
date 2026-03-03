@@ -2,10 +2,9 @@ use std::{net::SocketAddr, str::FromStr, time::Instant};
 
 use obj::Obj;
 use shared::{
-    geometry::Mesh,
-    math::{Transform3, Vector3},
+    math::{Mesh, Transform3, Vector3},
     net::{Network, Packet},
-    physics::{Collidable, CollisionData, Cuboid, Moment, step_world},
+    physics::{Collidable, CollisionData, ConvexHull, Cuboid, Moment, step_world},
     player::{PlayerData, PlayerInputState},
     utility::{EntityReserver, SingletonSet, SparseSet, Ticker},
 };
@@ -27,7 +26,7 @@ pub struct Game {
 
     players: SparseSet<PlayerData>,
     local_player: SingletonSet<()>,
-    colliders: SparseSet<Cuboid>,
+    colliders: SparseSet<ConvexHull>,
     momenta: SparseSet<Moment>,
     transforms: SparseSet<Transform3>,
     renderable: SparseSet<Renderable>,
@@ -175,13 +174,12 @@ impl Game {
                         .network
                         .reserve_real_entity(&mut self.reserver, net_entity);
 
-                    let collider = Cuboid::new(5.0, 5.0, 5.0);
-
                     self.transforms.insert(entity, Transform3::identity());
-                    self.momenta.insert(entity, Moment::new(5.0));
+                    self.momenta.insert(entity, Moment::new(5.0, 0.9));
 
-                    let obj = Obj::load("client/assets/Untitled.obj").unwrap();
+                    let obj = Obj::load("shared/assets/Untitled.obj").unwrap();
                     let mesh = Mesh::load_from_obj(&obj);
+                    let collider = ConvexHull::new(mesh.vertices.to_vec());
                     let renderable = self.renderer.create_renderable(&mesh).unwrap();
 
                     self.colliders.insert(entity, collider);

@@ -526,7 +526,7 @@ impl Renderer {
 
     pub fn create_renderable(
         &self,
-        mesh: &shared::geometry::Mesh,
+        mesh: &shared::math::Mesh,
     ) -> Result<Renderable, Box<dyn Error>> {
         let vertices = Buffer::from_iter(
             self.memory_allocator.clone(),

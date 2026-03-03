@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 shared = { workspace = true }
 thiserror = "2.0.18"
+obj = "0.10.2"

@@ -10,7 +10,6 @@ use thiserror::Error;
 use crate::math::{Quaternion, Transform3, Vector3};
 
 pub type Entity = usize;
-pub const NULL_ENTITY: Entity = usize::MAX;
 
 #[derive(Clone)]
 pub struct SparseSet<T> {
