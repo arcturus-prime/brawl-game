@@ -4,7 +4,7 @@ use obj::Obj;
 use shared::{
     math::{Mesh, Transform3, Vector3},
     net::{Network, Packet},
-    physics::{Collidable, CollisionData, ConvexHull, Cuboid, Moment, step_world},
+    physics::{Collider, CollisionData, Moment, step_world},
     player::{PlayerData, PlayerInputState},
     utility::{EntityReserver, SingletonSet, SparseSet, Ticker},
 };
@@ -26,7 +26,7 @@ pub struct Game {
 
     players: SparseSet<PlayerData>,
     local_player: SingletonSet<()>,
-    colliders: SparseSet<ConvexHull>,
+    colliders: SparseSet<Collider>,
     momenta: SparseSet<Moment>,
     transforms: SparseSet<Transform3>,
     renderable: SparseSet<Renderable>,
@@ -158,11 +158,7 @@ impl Game {
         let dt = (new_update_time - self.last_update).as_secs_f32();
         self.last_update = new_update_time;
 
-        println!("{}", 1.0 / dt);
-
-        if 1.0 / dt < 100.0 {
-            println!("\nLOW FRAMRATE\n");
-        }
+        println!("{}", self.renderer.get_frame_rate());
 
         while let Ok((_, packet)) = self.network.receive(&mut self.reserver) {
             match packet {
@@ -179,7 +175,7 @@ impl Game {
 
                     let obj = Obj::load("shared/assets/Untitled.obj").unwrap();
                     let mesh = Mesh::load_from_obj(&obj);
-                    let collider = ConvexHull::new(mesh.vertices.to_vec());
+                    let collider = Collider::new(mesh.vertices.to_vec());
                     let renderable = self.renderer.create_renderable(&mesh).unwrap();
 
                     self.colliders.insert(entity, collider);

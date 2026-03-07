@@ -1,8 +1,8 @@
 use shared::{
-    math::{Quaternion, Transform3, Vector3},
+    math::{MovingAverage, Quaternion, Transform3, Vector3},
     utility::{Entity, SparseSet},
 };
-use std::{error::Error, sync::Arc};
+use std::{error::Error, sync::Arc, time::Instant};
 use vulkano::{
     Validated, VulkanError, VulkanLibrary,
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
@@ -41,7 +41,7 @@ use vulkano::{
     swapchain::{
         Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo, acquire_next_image,
     },
-    sync::{self, GpuFuture},
+    sync::GpuFuture,
 };
 use winit::{event_loop::ActiveEventLoop, window::Window};
 
@@ -316,29 +316,6 @@ impl SwapchainManager {
     }
 }
 
-struct FrameSync {
-    previous_frame: Option<Box<dyn GpuFuture>>,
-}
-
-impl FrameSync {
-    fn new() -> Self {
-        Self {
-            previous_frame: None,
-        }
-    }
-    fn wait_for_previous(&mut self) {
-        if let Some(mut p) = self.previous_frame.take() {
-            p.cleanup_finished();
-        }
-    }
-    fn store(&mut self, f: Box<dyn GpuFuture>) {
-        self.previous_frame = Some(f);
-    }
-    fn handle_error(&mut self, device: Arc<Device>) {
-        self.previous_frame = Some(sync::now(device).boxed());
-    }
-}
-
 fn perspective(fov_y_deg: f32, aspect: f32, z_near: f32, z_far: f32) -> [[f32; 4]; 4] {
     let f = 1.0 / (fov_y_deg.to_radians() / 2.0).tan();
     let range = z_far - z_near;
@@ -404,7 +381,9 @@ fn view_matrix(t: &Transform3) -> [[f32; 4]; 4] {
 }
 
 pub struct Renderer {
+    last_render: Instant,
     should_recreate_swapchain: bool,
+    frame_time: MovingAverage<100>,
 
     library: Arc<VulkanLibrary>,
     instance: Arc<Instance>,
@@ -420,7 +399,6 @@ pub struct Renderer {
     camera_buffer: Subbuffer<CameraUniform>,
 
     swapchain_manager: SwapchainManager,
-    frame_sync: FrameSync,
     memory_allocator: Arc<StandardMemoryAllocator>,
     descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
@@ -504,6 +482,8 @@ impl Renderer {
         )?;
 
         Ok(Self {
+            frame_time: Default::default(),
+            last_render: Instant::now(),
             should_recreate_swapchain: false,
             library,
             instance,
@@ -517,11 +497,14 @@ impl Renderer {
             depth_image_view,
             camera_buffer,
             swapchain_manager,
-            frame_sync: FrameSync::new(),
             memory_allocator,
             descriptor_set_allocator,
             command_buffer_allocator,
         })
+    }
+
+    pub fn get_frame_rate(&self) -> f32 {
+        1.0 / self.frame_time.compute()
     }
 
     pub fn create_renderable(
@@ -578,7 +561,10 @@ impl Renderer {
         renderables: &SparseSet<Renderable>,
         transforms: &SparseSet<Transform3>,
     ) -> Result<(), Box<dyn Error>> {
-        self.frame_sync.wait_for_previous();
+        let new_render_time = Instant::now();
+        let dt = (new_render_time - self.last_render).as_secs_f32();
+        self.last_render = new_render_time;
+        self.frame_time.record(dt);
 
         if self.should_recreate_swapchain {
             self.recreate_swapchain()?;
@@ -671,6 +657,7 @@ impl Renderer {
             .set_layouts()
             .first()
             .ok_or("Missing pipeline layout")?;
+
         Ok(DescriptorSet::new(
             self.descriptor_set_allocator.clone(),
             layout.clone(),
@@ -703,7 +690,7 @@ impl Renderer {
         command_buffer: Arc<PrimaryAutoCommandBuffer>,
         image_index: u32,
     ) -> Result<(), Box<dyn Error>> {
-        let future = acquire_future
+        let _ = acquire_future
             .then_execute(self.queue.clone(), command_buffer)?
             .then_swapchain_present(
                 self.queue.clone(),
@@ -711,24 +698,9 @@ impl Renderer {
                     self.swapchain_manager.swapchain.clone(),
                     image_index,
                 ),
-            )
-            .then_signal_fence_and_flush();
+            );
 
-        match future.map_err(Validated::unwrap) {
-            Ok(f) => {
-                self.frame_sync.store(f.boxed());
-                Ok(())
-            }
-            Err(VulkanError::OutOfDate) => {
-                self.should_recreate_swapchain = true;
-                self.frame_sync.handle_error(self.device.clone());
-                Ok(())
-            }
-            Err(e) => {
-                self.frame_sync.handle_error(self.device.clone());
-                Err(e.into())
-            }
-        }
+        Ok(())
     }
 
     fn recreate_swapchain(&mut self) -> Result<(), Box<dyn Error>> {

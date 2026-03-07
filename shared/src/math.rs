@@ -6,6 +6,46 @@ use std::{
 
 use obj::Obj;
 
+pub struct MovingAverage<const N: usize> {
+    buffer: [f32; N],
+    last: usize,
+
+    clean: bool,
+}
+
+impl<const N: usize> Default for MovingAverage<N> {
+    fn default() -> Self {
+        Self {
+            buffer: [0.0; N],
+            last: 0,
+
+            clean: true,
+        }
+    }
+}
+
+impl<const N: usize> MovingAverage<N> {
+    pub fn record(&mut self, n: f32) {
+        self.buffer[self.last] = n;
+        self.last = (self.last + 1) % N;
+
+        if self.clean {
+            self.buffer.fill(n);
+            self.clean = false;
+        }
+    }
+
+    pub fn compute(&self) -> f32 {
+        let mut total = 0.0;
+
+        for x in self.buffer {
+            total += x;
+        }
+
+        total / N as f32
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vector3 {
     pub x: f32,

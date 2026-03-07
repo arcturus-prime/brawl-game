@@ -8,14 +8,14 @@ use obj::Obj;
 use shared::{
     math::{Mesh, Transform3},
     net::{Network, NetworkError, Packet},
-    physics::{ConvexHull, Cuboid, Moment, step_world},
+    physics::{Collider, Moment, step_world},
     player::PlayerData,
     utility::{EntityReserver, SparseSet, Ticker},
 };
 
 pub struct Game {
     players: SparseSet<PlayerData>,
-    colliders: SparseSet<ConvexHull>,
+    colliders: SparseSet<Collider>,
     momenta: SparseSet<Moment>,
     transforms: SparseSet<Transform3>,
 
@@ -36,7 +36,7 @@ impl Game {
                 Packet::ClientHello => {
                     let obj = Obj::load("shared/assets/Untitled.obj").unwrap();
                     let mesh = Mesh::load_from_obj(&obj);
-                    let collider = ConvexHull::new(mesh.vertices.to_vec());
+                    let collider = Collider::new(mesh.vertices.to_vec());
 
                     self.transforms
                         .insert(client_entity, Transform3::identity());

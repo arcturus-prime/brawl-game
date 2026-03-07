@@ -10,23 +10,19 @@ const MAX_EPA_ITERATIONS: usize = 128;
 const EPA_TOLERANCE: f32 = 1e-6;
 const RESTITUTION: f32 = 0.5;
 
-pub trait Collidable {
-    fn support(&self, direction: Vector3) -> Vector3;
-    fn aabb(&self, transform: &Transform3) -> BoundingBox3;
-}
-
-pub struct ConvexHull {
+#[derive(Clone)]
+pub struct Collider {
     points: Vec<Vector3>,
 }
 
-impl ConvexHull {
+impl Collider {
     pub fn new(points: Vec<Vector3>) -> Self {
         Self { points }
     }
 }
 
-impl Collidable for ConvexHull {
-    fn support(&self, direction: Vector3) -> Vector3 {
+impl Collider {
+    pub fn support(&self, direction: Vector3) -> Vector3 {
         let mut max_dot = f32::NEG_INFINITY;
         let mut max_vertex = Vector3::ZERO;
 
@@ -40,50 +36,22 @@ impl Collidable for ConvexHull {
         return max_vertex;
     }
 
-    fn aabb(&self, transform: &Transform3) -> BoundingBox3 {
-        BoundingBox3::new(Vector3::ZERO, Vector3::ONE)
-    }
-}
-
-pub struct Cuboid {
-    size: Vector3,
-}
-
-impl Cuboid {
-    pub fn new(x_size: f32, y_size: f32, z_size: f32) -> Self {
-        Self {
-            size: Vector3::new(x_size, y_size, z_size),
+    pub fn transform(&mut self, transform: &Transform3) {
+        for x in &mut self.points {
+            *x = transform.transform_vector(*x)
         }
     }
-}
 
-impl Collidable for Cuboid {
-    fn support(&self, direction: Vector3) -> Vector3 {
-        let vertices = &[
-            Vector3::new(self.size.x, self.size.y, self.size.z) / 2.0,
-            Vector3::new(self.size.x, -self.size.y, self.size.z) / 2.0,
-            Vector3::new(self.size.x, -self.size.y, -self.size.z) / 2.0,
-            Vector3::new(self.size.x, self.size.y, -self.size.z) / 2.0,
-            Vector3::new(-self.size.x, self.size.y, self.size.z) / 2.0,
-            Vector3::new(-self.size.x, -self.size.y, self.size.z) / 2.0,
-            Vector3::new(-self.size.x, -self.size.y, -self.size.z) / 2.0,
-            Vector3::new(-self.size.x, self.size.y, -self.size.z) / 2.0,
-        ];
+    pub fn aabb(&self) -> BoundingBox3 {
+        let mut min = Vector3::ONE * f32::INFINITY;
+        let mut max = Vector3::ONE * f32::NEG_INFINITY;
 
-        let mut max_dot = f32::NEG_INFINITY;
-        let mut max_vertex = Vector3::ZERO;
-        for x in vertices {
-            if direction.dot(*x) > max_dot {
-                max_dot = direction.dot(*x);
-                max_vertex = *x;
-            }
+        for point in &self.points {
+            min = Vector3::new(min.x.min(point.x), min.y.min(point.y), min.z.min(point.z));
+            max = Vector3::new(max.x.max(point.x), max.y.max(point.y), max.z.max(point.z));
         }
 
-        max_vertex
-    }
-
-    fn aabb(&self, transform: &Transform3) -> BoundingBox3 {
-        BoundingBox3::new(Vector3::ZERO, Vector3::ONE)
+        BoundingBox3::new(min, max)
     }
 }
 
@@ -94,36 +62,15 @@ enum Simplex {
     Tetrahedron(Vector3, Vector3, Vector3, Vector3),
 }
 
-fn gjk<T: Collidable, U: Collidable>(
-    first_transform: &Transform3,
-    first_collider: &T,
-    second_transform: &Transform3,
-    second_collider: &U,
+fn gjk(
+    first_collider: &Collider,
+    second_collider: &Collider,
+    initial_direction: Vector3,
 ) -> Option<[Vector3; 4]> {
-    let direction = {
-        let d = first_transform.position - second_transform.position;
+    let support =
+        |direction| first_collider.support(direction) - second_collider.support(-direction);
 
-        if d.length_squared() < f32::EPSILON {
-            Vector3::X
-        } else {
-            d
-        }
-    };
-
-    let support = |direction| {
-        first_transform.transform_vector(
-            first_collider.support(first_transform.rotation.inverse().rotate_vector(direction)),
-        ) - second_transform.transform_vector(
-            second_collider.support(
-                second_transform
-                    .rotation
-                    .inverse()
-                    .rotate_vector(-direction),
-            ),
-        )
-    };
-
-    let new_point = support(direction);
+    let new_point = support(initial_direction);
     let mut simplex = Simplex::Point(new_point);
 
     for _ in 0..MAX_GJK_ITERATIONS {
@@ -154,7 +101,6 @@ fn gjk<T: Collidable, U: Collidable>(
                     }
 
                     let new_point = support(direction);
-
                     if new_point.dot(direction) < 0.0 {
                         return None;
                     }
@@ -249,42 +195,26 @@ pub struct CollisionData {
     pub depth: f32,
 }
 
-pub fn epa<T: Collidable, U: Collidable>(
-    first_transform: &Transform3,
-    first_collider: &T,
-    second_transform: &Transform3,
-    second_collider: &U,
+pub fn epa(
+    first_collider: &Collider,
+    second_collider: &Collider,
+    initial_direction: Vector3,
 ) -> Option<CollisionData> {
-    let tetra = gjk(
-        first_transform,
-        first_collider,
-        second_transform,
-        second_collider,
-    )?;
+    let tetra = gjk(first_collider, second_collider, initial_direction)?;
 
-    let support = |direction| {
-        first_transform.transform_vector(
-            first_collider.support(first_transform.rotation.inverse().rotate_vector(direction)),
-        ) - second_transform.transform_vector(
-            second_collider.support(
-                second_transform
-                    .rotation
-                    .inverse()
-                    .rotate_vector(-direction),
-            ),
-        )
-    };
+    let support =
+        |direction| first_collider.support(direction) - second_collider.support(-direction);
 
     let mut vertices: Vec<Vector3> = tetra.to_vec();
     let mut faces: Vec<(usize, usize, usize)> = vec![(0, 1, 2), (0, 3, 1), (0, 2, 3), (1, 3, 2)];
 
     for i in 0..faces.len() {
-        let (ai, bi, ci) = faces[i];
-        let (a, b, c) = (vertices[ai], vertices[bi], vertices[ci]);
+        let (a_index, b_index, c_index) = faces[i];
+        let (a, b, c) = (vertices[a_index], vertices[b_index], vertices[c_index]);
 
         let normal = (b - a).cross(c - a);
         if normal.dot(a) < 0.0 {
-            faces[i] = (ai, ci, bi);
+            faces[i] = (a_index, c_index, b_index);
         }
     }
 
@@ -292,8 +222,8 @@ pub fn epa<T: Collidable, U: Collidable>(
         let mut closest_distance = f32::INFINITY;
         let mut closest_normal = Vector3::ZERO;
 
-        for (ai, bi, ci) in &faces {
-            let (a, b, c) = (vertices[*ai], vertices[*bi], vertices[*ci]);
+        for (a_index, b_index, c_index) in &faces {
+            let (a, b, c) = (vertices[*a_index], vertices[*b_index], vertices[*c_index]);
 
             let normal = (b - a).cross(c - a).normalize();
             let distance = normal.dot(a);
@@ -321,14 +251,16 @@ pub fn epa<T: Collidable, U: Collidable>(
 
         let mut i = 0;
         while i < faces.len() {
-            let (ai, bi, ci) = faces[i];
-            let (a, b, c) = (vertices[ai], vertices[bi], vertices[ci]);
+            let (a_index, b_index, c_index) = faces[i];
+            let (a, b, c) = (vertices[a_index], vertices[b_index], vertices[c_index]);
             let normal = (b - a).cross(c - a);
 
             if normal.dot(new_point - a) > 0.0 {
-                for (ei, ej) in [(ai, bi), (bi, ci), (ci, ai)] {
-                    if !horizon_edges.remove(&(ej, ei)) {
-                        horizon_edges.insert((ei, ej));
+                for (edge_index_a, edge_index_b) in
+                    [(a_index, b_index), (b_index, c_index), (c_index, a_index)]
+                {
+                    if !horizon_edges.remove(&(edge_index_b, edge_index_a)) {
+                        horizon_edges.insert((edge_index_a, edge_index_b));
                     }
                 }
 
@@ -338,16 +270,16 @@ pub fn epa<T: Collidable, U: Collidable>(
             }
         }
 
-        for (ei, ej) in horizon_edges {
-            faces.push((ei, ej, new_index));
+        for (edge_index_a, edge_index_b) in horizon_edges {
+            faces.push((edge_index_a, edge_index_b, new_index));
         }
     }
 
     let mut closest_distance = f32::INFINITY;
     let mut closest_normal = Vector3::ZERO;
 
-    for &(ai, bi, ci) in &faces {
-        let (a, b, c) = (vertices[ai], vertices[bi], vertices[ci]);
+    for &(a_index, b_index, c_index) in &faces {
+        let (a, b, c) = (vertices[a_index], vertices[b_index], vertices[c_index]);
         let normal = (b - a).cross(c - a).normalize();
         let distance = normal.dot(a);
 
@@ -388,25 +320,35 @@ impl Moment {
     }
 }
 
-pub fn step_world<T: Collidable>(
+pub fn step_world(
     momenta: &mut SparseSet<Moment>,
     transforms: &mut SparseSet<Transform3>,
-    colliders: &SparseSet<T>,
+    colliders: &SparseSet<Collider>,
     dt: f32,
 ) {
     for (id, moment) in momenta.iter_mut() {
         moment.update(&mut transforms[*id], dt);
     }
 
+    let mut world_colliders = SparseSet::default();
+    let mut world_aabbs = SparseSet::default();
+    for (id, data) in colliders.iter() {
+        let mut world_collider = data.clone();
+        world_collider.transform(&transforms[*id]);
+
+        world_aabbs.insert(*id, world_collider.aabb());
+        world_colliders.insert(*id, world_collider);
+    }
+
     // naive solution for now
-    for (id_a, body_a) in colliders.iter() {
-        for (id_b, body_b) in colliders.iter() {
+    for (id_a, body_a) in world_colliders.iter() {
+        for (id_b, body_b) in world_colliders.iter() {
             if id_a == id_b {
                 continue;
             }
 
-            let Some(collision) = epa(&transforms[*id_a], body_a, &transforms[*id_b], body_b)
-            else {
+            let direction = transforms[*id_a].position - transforms[*id_b].position;
+            let Some(collision) = epa(body_a, body_b, direction) else {
                 continue;
             };
 
